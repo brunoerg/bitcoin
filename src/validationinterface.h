@@ -21,6 +21,7 @@ class CConnman;
 class CValidationInterface;
 class uint256;
 class CScheduler;
+enum class MemPoolRemovalReason;
 
 /** Register subscriber */
 void RegisterValidationInterface(CValidationInterface* callbacks);
@@ -96,7 +97,8 @@ protected:
      *
      * Called on a background thread.
      */
-    virtual void TransactionAddedToMempool(const CTransactionRef &ptxn) {}
+    virtual void TransactionAddedToMempool(const CTransactionRef& tx, uint64_t mempool_sequence) {}
+
     /**
      * Notifies listeners of a transaction leaving mempool.
      *
@@ -129,7 +131,7 @@ protected:
      *
      * Called on a background thread.
      */
-    virtual void TransactionRemovedFromMempool(const CTransactionRef &ptx) {}
+    virtual void TransactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRemovalReason reason, uint64_t mempool_sequence) {}
     /**
      * Notifies listeners of a block being connected.
      * Provides a vector of transactions evicted from the mempool as a result.
@@ -196,8 +198,8 @@ public:
 
 
     void UpdatedBlockTip(const CBlockIndex *, const CBlockIndex *, bool fInitialDownload);
-    void TransactionAddedToMempool(const CTransactionRef &);
-    void TransactionRemovedFromMempool(const CTransactionRef &);
+    void TransactionAddedToMempool(const CTransactionRef&, uint64_t mempool_sequence);
+    void TransactionRemovedFromMempool(const CTransactionRef&, MemPoolRemovalReason, uint64_t mempool_sequence);
     void BlockConnected(const std::shared_ptr<const CBlock> &, const CBlockIndex *pindex);
     void BlockDisconnected(const std::shared_ptr<const CBlock> &, const CBlockIndex* pindex);
     void ChainStateFlushed(const CBlockLocator &);

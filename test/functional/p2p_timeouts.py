@@ -24,7 +24,7 @@
 from time import sleep
 
 from test_framework.messages import msg_ping
-from test_framework.mininode import P2PInterface
+from test_framework.p2p import P2PInterface
 from test_framework.test_framework import BitcoinTestFramework
 
 
@@ -57,8 +57,10 @@ class TimeoutsTest(BitcoinTestFramework):
         assert no_version_node.is_connected
         assert no_send_node.is_connected
 
-        no_verack_node.send_message(msg_ping())
-        no_version_node.send_message(msg_ping())
+        with self.nodes[0].assert_debug_log(['Unsupported message "ping" prior to verack from peer=0']):
+            no_verack_node.send_message(msg_ping())
+        with self.nodes[0].assert_debug_log(['non-version message before version handshake. Message "ping" from peer=1']):
+            no_version_node.send_message(msg_ping())
 
         sleep(1)
 

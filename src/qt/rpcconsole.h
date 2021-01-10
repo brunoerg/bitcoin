@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2019 The Bitcoin Core developers
+// Copyright (c) 2011-2020 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -28,6 +28,7 @@ namespace Ui {
 }
 
 QT_BEGIN_NAMESPACE
+class QDateTime;
 class QMenu;
 class QItemSelection;
 QT_END_NAMESPACE
@@ -46,7 +47,7 @@ public:
         return RPCParseCommandLine(&node, strResult, strCommand, true, pstrFilteredOut, wallet_model);
     }
 
-    void setClientModel(ClientModel *model);
+    void setClientModel(ClientModel *model = nullptr, int bestblock_height = 0, int64_t bestblock_date = 0, double verification_progress = 0.0);
     void addWallet(WalletModel * const walletModel);
     void removeWallet(WalletModel* const walletModel);
 
@@ -94,6 +95,8 @@ private Q_SLOTS:
     void showOrHideBanTableIfRequired();
     /** clear the selected node */
     void clearSelectedNode();
+    /** show detailed information on ui about selected node */
+    void updateDetailWidget();
 
 public Q_SLOTS:
     void clear(bool clearHistory = true);
@@ -115,8 +118,6 @@ public Q_SLOTS:
     void browseHistory(int offset);
     /** Scroll console view to end */
     void scrollToEnd();
-    /** Handle selection of peer in peers list */
-    void peerSelected(const QItemSelection &selected, const QItemSelection &deselected);
     /** Handle selection caching before update */
     void peerLayoutAboutToChange();
     /** Handle updated peer information */
@@ -137,8 +138,6 @@ Q_SIGNALS:
 private:
     void startExecutor();
     void setTrafficGraphRange(int mins);
-    /** show detailed information on ui about selected node */
-    void updateNodeDetail(const CNodeCombinedStats *stats);
 
     enum ColumnWidths
     {

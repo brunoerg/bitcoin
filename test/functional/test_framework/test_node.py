@@ -23,6 +23,7 @@ import sys
 
 from .authproxy import JSONRPCException
 from .descriptors import descsum_create
+from .messages import MY_SUBVERSION
 from .util import (
     MAX_NODES,
     append_config,
@@ -30,7 +31,7 @@ from .util import (
     get_auth_cookie,
     get_rpc_proxy,
     rpc_url,
-    wait_until,
+    wait_until_helper,
     p2p_port,
     EncodeDecimal,
 )
@@ -230,7 +231,7 @@ class TestNode():
                 if self.version_is_at_least(190000):
                     # getmempoolinfo.loaded is available since commit
                     # bb8ae2c (version 0.19.0)
-                    wait_until(lambda: rpc.getmempoolinfo()['loaded'])
+                    wait_until_helper(lambda: rpc.getmempoolinfo()['loaded'], timeout_factor=self.timeout_factor)
                     # Wait for the node to finish reindex, block import, and
                     # loading the mempool. Usually importing happens fast or
                     # even "immediate" when the node is started. However, there
@@ -307,7 +308,7 @@ class TestNode():
     def version_is_at_least(self, ver):
         return self.version is None or self.version >= ver
 
-    def stop_node(self, expected_stderr='', wait=0):
+    def stop_node(self, expected_stderr='', *, wait=0, wait_until_stopped=True):
         """Stop the node."""
         if not self.running:
             return
@@ -336,6 +337,9 @@ class TestNode():
 
         del self.p2ps[:]
 
+        if wait_until_stopped:
+            self.wait_until_stopped()
+
     def is_node_stopped(self):
         """Checks whether the node has stopped.
 
@@ -358,7 +362,7 @@ class TestNode():
         return True
 
     def wait_until_stopped(self, timeout=BITCOIND_PROC_WAIT_TIMEOUT):
-        wait_until(self.is_node_stopped, timeout=timeout, timeout_factor=self.timeout_factor)
+        wait_until_helper(self.is_node_stopped, timeout=timeout, timeout_factor=self.timeout_factor)
 
     @contextlib.contextmanager
     def assert_debug_log(self, expected_msgs, unexpected_msgs=None, timeout=2):
@@ -481,11 +485,8 @@ class TestNode():
              tempfile.NamedTemporaryFile(dir=self.stdout_dir, delete=False) as log_stdout:
             try:
                 self.start(extra_args, stdout=log_stdout, stderr=log_stderr, *args, **kwargs)
-                self.wait_for_rpc_connection()
-                self.stop_node()
-                self.wait_until_stopped()
-            except FailedToStartError as e:
-                self.log.debug('bitcoind failed to start: %s', e)
+                ret = self.process.wait(timeout=self.rpc_timeout)
+                self.log.debug(self._node_msg(f'bitcoind exited with status {ret} during initialization'))
                 self.running = False
                 self.process = None
                 # Check stderr for expected message
@@ -504,11 +505,15 @@ class TestNode():
                         if expected_msg != stderr:
                             self._raise_assertion_error(
                                 'Expected message "{}" does not fully match stderr:\n"{}"'.format(expected_msg, stderr))
-            else:
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.running = False
+                self.process = None
+                assert_msg = f'bitcoind should have exited within {self.rpc_timeout}s '
                 if expected_msg is None:
-                    assert_msg = "bitcoind should have exited with an error"
+                    assert_msg += "with an error"
                 else:
-                    assert_msg = "bitcoind should have exited with expected error " + expected_msg
+                    assert_msg += "with expected error " + expected_msg
                 self._raise_assertion_error(assert_msg)
 
     def add_p2p_connection(self, p2p_conn, *, wait_for_verack=True, **kwargs):
@@ -523,6 +528,7 @@ class TestNode():
 
         p2p_conn.peer_connect(**kwargs, net=self.chain, timeout_factor=self.timeout_factor)()
         self.p2ps.append(p2p_conn)
+        p2p_conn.wait_until(lambda: p2p_conn.is_connected, check_connected=False)
         if wait_for_verack:
             # Wait for the node to send us the version and verack
             p2p_conn.wait_for_verack()
@@ -540,20 +546,16 @@ class TestNode():
 
         return p2p_conn
 
-    @property
-    def p2p(self):
-        """Return the first p2p connection
-
-        Convenience property - most tests only use a single p2p connection to each
-        node, so this saves having to write node.p2ps[0] many times."""
-        assert self.p2ps, self._node_msg("No p2p connection")
-        return self.p2ps[0]
+    def num_test_p2p_connections(self):
+        """Return number of test framework p2p connections to the node."""
+        return len([peer for peer in self.getpeerinfo() if peer['subver'] == MY_SUBVERSION.decode("utf-8")])
 
     def disconnect_p2ps(self):
         """Close all p2p connections to the node."""
         for p in self.p2ps:
             p.peer_disconnect()
         del self.p2ps[:]
+        wait_until_helper(lambda: self.num_test_p2p_connections() == 0, timeout_factor=self.timeout_factor)
 
 
 class TestNodeCLIAttr:
@@ -631,7 +633,7 @@ class TestNodeCLI():
             raise subprocess.CalledProcessError(returncode, self.binary, output=cli_stderr)
         try:
             return json.loads(cli_stdout, parse_float=decimal.Decimal)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, decimal.InvalidOperation):
             return cli_stdout.rstrip("\n")
 
 class RPCOverloadWrapper():
@@ -643,10 +645,10 @@ class RPCOverloadWrapper():
     def __getattr__(self, name):
         return getattr(self.rpc, name)
 
-    def createwallet(self, wallet_name, disable_private_keys=None, blank=None, passphrase='', avoid_reuse=None, descriptors=None):
+    def createwallet(self, wallet_name, disable_private_keys=None, blank=None, passphrase='', avoid_reuse=None, descriptors=None, load_on_startup=None):
         if descriptors is None:
             descriptors = self.descriptors
-        return self.__getattr__('createwallet')(wallet_name, disable_private_keys, blank, passphrase, avoid_reuse, descriptors)
+        return self.__getattr__('createwallet')(wallet_name, disable_private_keys, blank, passphrase, avoid_reuse, descriptors, load_on_startup)
 
     def importprivkey(self, privkey, label=None, rescan=None):
         wallet_info = self.getwalletinfo()

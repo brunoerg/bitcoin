@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2019 The Bitcoin Core developers
+// Copyright (c) 2011-2020 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -240,22 +240,6 @@ void ReceiveCoinsDialog::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     columnResizingFixer->stretchColumnWidth(RecentRequestsTableModel::Message);
-}
-
-void ReceiveCoinsDialog::keyPressEvent(QKeyEvent *event)
-{
-    if (event->key() == Qt::Key_Return)
-    {
-        // press return -> submit form
-        if (ui->reqLabel->hasFocus() || ui->reqAmount->hasFocus() || ui->reqMessage->hasFocus())
-        {
-            event->ignore();
-            on_receiveButton_clicked();
-            return;
-        }
-    }
-
-    this->QDialog::keyPressEvent(event);
 }
 
 QModelIndex ReceiveCoinsDialog::selectedRow()

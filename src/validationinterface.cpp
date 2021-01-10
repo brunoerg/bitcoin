@@ -199,22 +199,22 @@ void CMainSignals::UpdatedBlockTip(const CBlockIndex *pindexNew, const CBlockInd
                           fInitialDownload);
 }
 
-void CMainSignals::TransactionAddedToMempool(const CTransactionRef &ptx) {
-    auto event = [ptx, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.TransactionAddedToMempool(ptx); });
+void CMainSignals::TransactionAddedToMempool(const CTransactionRef& tx, uint64_t mempool_sequence) {
+    auto event = [tx, mempool_sequence, this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.TransactionAddedToMempool(tx, mempool_sequence); });
     };
     ENQUEUE_AND_LOG_EVENT(event, "%s: txid=%s wtxid=%s", __func__,
-                          ptx->GetHash().ToString(),
-                          ptx->GetWitnessHash().ToString());
+                          tx->GetHash().ToString(),
+                          tx->GetWitnessHash().ToString());
 }
 
-void CMainSignals::TransactionRemovedFromMempool(const CTransactionRef &ptx) {
-    auto event = [ptx, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.TransactionRemovedFromMempool(ptx); });
+void CMainSignals::TransactionRemovedFromMempool(const CTransactionRef& tx, MemPoolRemovalReason reason, uint64_t mempool_sequence) {
+    auto event = [tx, reason, mempool_sequence, this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.TransactionRemovedFromMempool(tx, reason, mempool_sequence); });
     };
     ENQUEUE_AND_LOG_EVENT(event, "%s: txid=%s wtxid=%s", __func__,
-                          ptx->GetHash().ToString(),
-                          ptx->GetWitnessHash().ToString());
+                          tx->GetHash().ToString(),
+                          tx->GetWitnessHash().ToString());
 }
 
 void CMainSignals::BlockConnected(const std::shared_ptr<const CBlock> &pblock, const CBlockIndex *pindex) {

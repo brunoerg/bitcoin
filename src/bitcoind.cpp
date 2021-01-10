@@ -13,9 +13,9 @@
 #include <init.h>
 #include <interfaces/chain.h>
 #include <node/context.h>
+#include <node/ui_interface.h>
 #include <noui.h>
 #include <shutdown.h>
-#include <ui_interface.h>
 #include <util/ref.h>
 #include <util/strencodings.h>
 #include <util/system.h>
@@ -28,50 +28,31 @@
 const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 UrlDecodeFn* const URL_DECODE = urlDecode;
 
-static void WaitForShutdown(NodeContext& node)
-{
-    while (!ShutdownRequested())
-    {
-        UninterruptibleSleep(std::chrono::milliseconds{200});
-    }
-    Interrupt(node);
-}
-
-//////////////////////////////////////////////////////////////////////////////
-//
-// Start
-//
 static bool AppInit(int argc, char* argv[])
 {
     NodeContext node;
-    node.chain = interfaces::MakeChain(node);
 
     bool fRet = false;
 
     util::ThreadSetInternalName("init");
 
-    //
-    // Parameters
-    //
     // If Qt is used, parameters/bitcoin.conf are parsed in qt/bitcoin.cpp's main()
     SetupServerArgs(node);
+    ArgsManager& args = *Assert(node.args);
     std::string error;
-    if (!gArgs.ParseParameters(argc, argv, error)) {
+    if (!args.ParseParameters(argc, argv, error)) {
         return InitError(Untranslated(strprintf("Error parsing command line arguments: %s\n", error)));
     }
 
     // Process help and version before taking care about datadir
-    if (HelpRequested(gArgs) || gArgs.IsArgSet("-version")) {
+    if (HelpRequested(args) || args.IsArgSet("-version")) {
         std::string strUsage = PACKAGE_NAME " version " + FormatFullVersion() + "\n";
 
-        if (gArgs.IsArgSet("-version"))
-        {
-            strUsage += FormatParagraph(LicenseInfo()) + "\n";
-        }
-        else
-        {
-            strUsage += "\nUsage:  bitcoind [options]                     Start " PACKAGE_NAME "\n";
-            strUsage += "\n" + gArgs.GetHelpMessage();
+        if (!args.IsArgSet("-version")) {
+            strUsage += FormatParagraph(LicenseInfo()) + "\n"
+                "\nUsage:  bitcoind [options]                     Start " PACKAGE_NAME "\n"
+                "\n";
+            strUsage += args.GetHelpMessage();
         }
 
         tfm::format(std::cout, "%s", strUsage);
@@ -82,14 +63,14 @@ static bool AppInit(int argc, char* argv[])
     try
     {
         if (!CheckDataDirOption()) {
-            return InitError(Untranslated(strprintf("Specified data directory \"%s\" does not exist.\n", gArgs.GetArg("-datadir", ""))));
+            return InitError(Untranslated(strprintf("Specified data directory \"%s\" does not exist.\n", args.GetArg("-datadir", ""))));
         }
-        if (!gArgs.ReadConfigFiles(error, true)) {
+        if (!args.ReadConfigFiles(error, true)) {
             return InitError(Untranslated(strprintf("Error reading configuration file: %s\n", error)));
         }
-        // Check for -chain, -testnet or -regtest parameter (Params() calls are only valid after this clause)
+        // Check for chain settings (Params() calls are only valid after this clause)
         try {
-            SelectParams(gArgs.GetChainName());
+            SelectParams(args.GetChainName());
         } catch (const std::exception& e) {
             return InitError(Untranslated(strprintf("%s\n", e.what())));
         }
@@ -101,18 +82,21 @@ static bool AppInit(int argc, char* argv[])
             }
         }
 
+        if (!args.InitSettings(error)) {
+            InitError(Untranslated(error));
+            return false;
+        }
+
         // -server defaults to true for bitcoind but not for the GUI so do this here
-        gArgs.SoftSetBoolArg("-server", true);
+        args.SoftSetBoolArg("-server", true);
         // Set this early so that parameter interactions go to console
-        InitLogging();
-        InitParameterInteraction();
-        if (!AppInitBasicSetup())
-        {
+        InitLogging(args);
+        InitParameterInteraction(args);
+        if (!AppInitBasicSetup(args)) {
             // InitError will have been called with detailed error, which ends up on console
             return false;
         }
-        if (!AppInitParameterInteraction())
-        {
+        if (!AppInitParameterInteraction(args)) {
             // InitError will have been called with detailed error, which ends up on console
             return false;
         }
@@ -121,8 +105,7 @@ static bool AppInit(int argc, char* argv[])
             // InitError will have been called with detailed error, which ends up on console
             return false;
         }
-        if (gArgs.GetBoolArg("-daemon", false))
-        {
+        if (args.GetBoolArg("-daemon", false)) {
 #if HAVE_DECL_DAEMON
 #if defined(MAC_OSX)
 #pragma GCC diagnostic push
@@ -147,7 +130,7 @@ static bool AppInit(int argc, char* argv[])
             // If locking the data directory failed, exit immediately
             return false;
         }
-        fRet = AppInitMain(context, node);
+        fRet = AppInitInterfaces(node) && AppInitMain(context, node);
     }
     catch (const std::exception& e) {
         PrintExceptionContinue(&e, "AppInit()");
@@ -155,12 +138,10 @@ static bool AppInit(int argc, char* argv[])
         PrintExceptionContinue(nullptr, "AppInit()");
     }
 
-    if (!fRet)
-    {
-        Interrupt(node);
-    } else {
-        WaitForShutdown(node);
+    if (fRet) {
+        WaitForShutdown();
     }
+    Interrupt(node);
     Shutdown(node);
 
     return fRet;

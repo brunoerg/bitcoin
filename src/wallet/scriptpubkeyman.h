@@ -11,6 +11,7 @@
 #include <script/standard.h>
 #include <util/error.h>
 #include <util/message.h>
+#include <util/time.h>
 #include <wallet/crypter.h>
 #include <wallet/ismine.h>
 #include <wallet/walletdb.h>
@@ -33,11 +34,11 @@ class WalletStorage
 public:
     virtual ~WalletStorage() = default;
     virtual const std::string GetDisplayName() const = 0;
-    virtual WalletDatabase& GetDatabase() = 0;
+    virtual WalletDatabase& GetDatabase() const = 0;
     virtual bool IsWalletFlagSet(uint64_t) const = 0;
     virtual void UnsetBlankWalletFlag(WalletBatch&) = 0;
     virtual bool CanSupportFeature(enum WalletFeature) const = 0;
-    virtual void SetMinVersion(enum WalletFeature, WalletBatch* = nullptr, bool = false) = 0;
+    virtual void SetMinVersion(enum WalletFeature, WalletBatch* = nullptr) = 0;
     virtual const CKeyingMaterial& GetEncryptionKey() const = 0;
     virtual bool HasEncryptionKeys() const = 0;
     virtual bool IsLocked() const = 0;
@@ -171,7 +172,7 @@ protected:
     WalletStorage& m_storage;
 
 public:
-    ScriptPubKeyMan(WalletStorage& storage) : m_storage(storage) {}
+    explicit ScriptPubKeyMan(WalletStorage& storage) : m_storage(storage) {}
     virtual ~ScriptPubKeyMan() {};
     virtual bool GetNewDestination(const OutputType type, CTxDestination& dest, std::string& error) { return false; }
     virtual isminetype IsMine(const CScript& script) const { return ISMINE_NO; }
@@ -206,7 +207,7 @@ public:
     virtual bool CanGetAddresses(bool internal = false) const { return false; }
 
     /** Upgrades the wallet to the specified version */
-    virtual bool Upgrade(int prev_version, bilingual_str& error) { return false; }
+    virtual bool Upgrade(int prev_version, int new_version, bilingual_str& error) { return false; }
 
     virtual bool HavePrivateKeys() const { return false; }
 
@@ -234,7 +235,7 @@ public:
     /** Sign a message with the given script */
     virtual SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const { return SigningResult::SIGNING_FAILED; };
     /** Adds script and derivation path information to a PSBT, and optionally signs it. */
-    virtual TransactionError FillPSBT(PartiallySignedTransaction& psbt, int sighash_type = 1 /* SIGHASH_ALL */, bool sign = true, bool bip32derivs = false) const { return TransactionError::INVALID_PSBT; }
+    virtual TransactionError FillPSBT(PartiallySignedTransaction& psbt, int sighash_type = 1 /* SIGHASH_ALL */, bool sign = true, bool bip32derivs = false, int* n_signed = nullptr) const { return TransactionError::INVALID_PSBT; }
 
     virtual uint256 GetID() const { return uint256(); }
 
@@ -371,7 +372,7 @@ public:
 
     bool SetupGeneration(bool force = false) override;
 
-    bool Upgrade(int prev_version, bilingual_str& error) override;
+    bool Upgrade(int prev_version, int new_version, bilingual_str& error) override;
 
     bool HavePrivateKeys() const override;
 
@@ -393,7 +394,7 @@ public:
 
     bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const override;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const override;
-    TransactionError FillPSBT(PartiallySignedTransaction& psbt, int sighash_type = 1 /* SIGHASH_ALL */, bool sign = true, bool bip32derivs = false) const override;
+    TransactionError FillPSBT(PartiallySignedTransaction& psbt, int sighash_type = 1 /* SIGHASH_ALL */, bool sign = true, bool bip32derivs = false, int* n_signed = nullptr) const override;
 
     uint256 GetID() const override;
 
@@ -422,8 +423,10 @@ public:
     //! Generate a new key
     CPubKey GenerateNewKey(WalletBatch& batch, CHDChain& hd_chain, bool internal = false) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
 
-    /* Set the HD chain model (chain child index counters) */
-    void SetHDChain(const CHDChain& chain, bool memonly);
+    /* Set the HD chain model (chain child index counters) and writes it to the database */
+    void AddHDChain(const CHDChain& chain);
+    //! Load a HD chain model (used by LoadWallet)
+    void LoadHDChain(const CHDChain& chain);
     const CHDChain& GetHDChain() const { return m_hd_chain; }
     void AddInactiveHDChain(const CHDChain& chain);
 
@@ -501,7 +504,7 @@ class LegacySigningProvider : public SigningProvider
 private:
     const LegacyScriptPubKeyMan& m_spk_man;
 public:
-    LegacySigningProvider(const LegacyScriptPubKeyMan& spk_man) : m_spk_man(spk_man) {}
+    explicit LegacySigningProvider(const LegacyScriptPubKeyMan& spk_man) : m_spk_man(spk_man) {}
 
     bool GetCScript(const CScriptID &scriptid, CScript& script) const override { return m_spk_man.GetCScript(scriptid, script); }
     bool HaveCScript(const CScriptID &scriptid) const override { return m_spk_man.HaveCScript(scriptid); }
@@ -533,7 +536,7 @@ private:
     //! keeps track of whether Unlock has run a thorough check before
     bool m_decryption_thoroughly_checked = false;
 
-    bool AddDescriptorKeyWithDB(WalletBatch& batch, const CKey& key, const CPubKey &pubkey);
+    bool AddDescriptorKeyWithDB(WalletBatch& batch, const CKey& key, const CPubKey &pubkey) EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
 
     KeyMap GetKeys() const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
 
@@ -596,7 +599,7 @@ public:
 
     bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const override;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const override;
-    TransactionError FillPSBT(PartiallySignedTransaction& psbt, int sighash_type = 1 /* SIGHASH_ALL */, bool sign = true, bool bip32derivs = false) const override;
+    TransactionError FillPSBT(PartiallySignedTransaction& psbt, int sighash_type = 1 /* SIGHASH_ALL */, bool sign = true, bool bip32derivs = false, int* n_signed = nullptr) const override;
 
     uint256 GetID() const override;
 

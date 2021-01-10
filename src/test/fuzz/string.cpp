@@ -12,6 +12,7 @@
 #include <rpc/server.h>
 #include <rpc/util.h>
 #include <script/descriptor.h>
+#include <script/script.h>
 #include <serialize.h>
 #include <streams.h>
 #include <test/fuzz/FuzzedDataProvider.h>
@@ -32,7 +33,7 @@
 #include <string>
 #include <vector>
 
-void test_one_input(const std::vector<uint8_t>& buffer)
+FUZZ_TARGET(string)
 {
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
     const std::string random_string_1 = fuzzed_data_provider.ConsumeRandomLengthString(32);
@@ -89,6 +90,10 @@ void test_one_input(const std::vector<uint8_t>& buffer)
     (void)urlDecode(random_string_1);
     (void)ValidAsCString(random_string_1);
     (void)_(random_string_1.c_str());
+    try {
+        throw scriptnum_error{random_string_1};
+    } catch (const std::runtime_error&) {
+    }
 
     {
         CDataStream data_stream{SER_NETWORK, INIT_PROTO_VERSION};

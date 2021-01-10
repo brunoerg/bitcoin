@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2019 The Bitcoin Core developers
+// Copyright (c) 2011-2020 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -17,6 +17,7 @@ class ClientModel;
 class PlatformStyle;
 class SendCoinsEntry;
 class SendCoinsRecipient;
+enum class SynchronizationState;
 
 namespace Ui {
     class SendCoinsDialog;
@@ -98,6 +99,7 @@ private Q_SLOTS:
     void coinControlClipboardLowOutput();
     void coinControlClipboardChange();
     void updateFeeSectionControls();
+    void updateNumberOfBlocks(int count, const QDateTime& blockDate, double nVerificationProgress, bool headers, SynchronizationState sync_state);
     void updateSmartFeeLabel();
 
 Q_SIGNALS:

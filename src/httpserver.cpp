@@ -7,10 +7,10 @@
 #include <chainparamsbase.h>
 #include <compat.h>
 #include <netbase.h>
+#include <node/ui_interface.h>
 #include <rpc/protocol.h> // For HTTP status codes
 #include <shutdown.h>
 #include <sync.h>
-#include <ui_interface.h>
 #include <util/strencodings.h>
 #include <util/system.h>
 #include <util/threadnames.h>
@@ -32,13 +32,6 @@
 #include <event2/keyvalq_struct.h>
 
 #include <support/events.h>
-
-#ifdef EVENT__HAVE_NETINET_IN_H
-#include <netinet/in.h>
-#ifdef _XOPEN_SOURCE_EXTENDED
-#include <arpa/inet.h>
-#endif
-#endif
 
 /** Maximum size of http request (request line + headers) */
 static const size_t MAX_HEADERS_SIZE = 8192;

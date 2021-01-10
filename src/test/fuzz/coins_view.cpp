@@ -34,14 +34,14 @@ bool operator==(const Coin& a, const Coin& b)
 }
 } // namespace
 
-void initialize()
+void initialize_coins_view()
 {
     static const ECCVerifyHandle ecc_verify_handle;
     ECC_Start();
     SelectParams(CBaseChainParams::REGTEST);
 }
 
-void test_one_input(const std::vector<uint8_t>& buffer)
+FUZZ_TARGET_INIT(coins_view, initialize_coins_view)
 {
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     CCoinsView backend_coins_view;
@@ -229,7 +229,8 @@ void test_one_input(const std::vector<uint8_t>& buffer)
             break;
         }
         case 1: {
-            (void)AreInputsStandard(CTransaction{random_mutable_transaction}, coins_view_cache);
+            (void)AreInputsStandard(CTransaction{random_mutable_transaction}, coins_view_cache, false);
+            (void)AreInputsStandard(CTransaction{random_mutable_transaction}, coins_view_cache, true);
             break;
         }
         case 2: {
@@ -278,7 +279,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
             CCoinsStats stats;
             bool expected_code_path = false;
             try {
-                (void)GetUTXOStats(&coins_view_cache, stats);
+                (void)GetUTXOStats(&coins_view_cache, stats, CoinStatsHashType::HASH_SERIALIZED);
             } catch (const std::logic_error&) {
                 expected_code_path = true;
             }

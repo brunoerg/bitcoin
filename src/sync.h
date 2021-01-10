@@ -48,14 +48,17 @@ LEAVE_CRITICAL_SECTION(mutex); // no RAII
 ///////////////////////////////
 
 #ifdef DEBUG_LOCKORDER
-void EnterCritical(const char* pszName, const char* pszFile, int nLine, void* cs, bool fTry = false);
+template <typename MutexType>
+void EnterCritical(const char* pszName, const char* pszFile, int nLine, MutexType* cs, bool fTry = false);
 void LeaveCritical();
 void CheckLastCritical(void* cs, std::string& lockname, const char* guardname, const char* file, int line);
 std::string LocksHeld();
 template <typename MutexType>
-void AssertLockHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs) ASSERT_EXCLUSIVE_LOCK(cs);
-void AssertLockNotHeldInternal(const char* pszName, const char* pszFile, int nLine, void* cs);
+void AssertLockHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs) EXCLUSIVE_LOCKS_REQUIRED(cs);
+template <typename MutexType>
+void AssertLockNotHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs) EXCLUSIVE_LOCKS_REQUIRED(!cs);
 void DeleteLock(void* cs);
+bool LockStackEmpty();
 
 /**
  * Call abort() if a potential lock order deadlock bug is detected, instead of
@@ -64,13 +67,16 @@ void DeleteLock(void* cs);
  */
 extern bool g_debug_lockorder_abort;
 #else
-void static inline EnterCritical(const char* pszName, const char* pszFile, int nLine, void* cs, bool fTry = false) {}
-void static inline LeaveCritical() {}
-void static inline CheckLastCritical(void* cs, std::string& lockname, const char* guardname, const char* file, int line) {}
 template <typename MutexType>
-void static inline AssertLockHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs) ASSERT_EXCLUSIVE_LOCK(cs) {}
-void static inline AssertLockNotHeldInternal(const char* pszName, const char* pszFile, int nLine, void* cs) {}
-void static inline DeleteLock(void* cs) {}
+inline void EnterCritical(const char* pszName, const char* pszFile, int nLine, MutexType* cs, bool fTry = false) {}
+inline void LeaveCritical() {}
+inline void CheckLastCritical(void* cs, std::string& lockname, const char* guardname, const char* file, int line) {}
+template <typename MutexType>
+inline void AssertLockHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs) EXCLUSIVE_LOCKS_REQUIRED(cs) {}
+template <typename MutexType>
+void AssertLockNotHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs) EXCLUSIVE_LOCKS_REQUIRED(!cs) {}
+inline void DeleteLock(void* cs) {}
+inline bool LockStackEmpty() { return true; }
 #endif
 #define AssertLockHeld(cs) AssertLockHeldInternal(#cs, __FILE__, __LINE__, &cs)
 #define AssertLockNotHeld(cs) AssertLockNotHeldInternal(#cs, __FILE__, __LINE__, &cs)
@@ -103,6 +109,12 @@ public:
     }
 
     using UniqueLock = std::unique_lock<PARENT>;
+#ifdef __clang__
+    //! For negative capabilities in the Clang Thread Safety Analysis.
+    //! A negative requirement uses the EXCLUSIVE_LOCKS_REQUIRED attribute, in conjunction
+    //! with the ! operator, to indicate that a mutex should not be held.
+    const AnnotatedMixin& operator!() const { return *this; }
+#endif // __clang__
 };
 
 /**
@@ -125,7 +137,7 @@ class SCOPED_LOCKABLE UniqueLock : public Base
 private:
     void Enter(const char* pszName, const char* pszFile, int nLine)
     {
-        EnterCritical(pszName, pszFile, nLine, (void*)(Base::mutex()));
+        EnterCritical(pszName, pszFile, nLine, Base::mutex());
 #ifdef DEBUG_LOCKCONTENTION
         if (!Base::try_lock()) {
             PrintLockContention(pszName, pszFile, nLine);
@@ -138,7 +150,7 @@ private:
 
     bool TryEnter(const char* pszName, const char* pszFile, int nLine)
     {
-        EnterCritical(pszName, pszFile, nLine, (void*)(Base::mutex()), true);
+        EnterCritical(pszName, pszFile, nLine, Base::mutex(), true);
         Base::try_lock();
         if (!Base::owns_lock())
             LeaveCritical();
@@ -195,7 +207,7 @@ public:
 
         ~reverse_lock() {
             templock.swap(lock);
-            EnterCritical(lockname.c_str(), file.c_str(), line, (void*)lock.mutex());
+            EnterCritical(lockname.c_str(), file.c_str(), line, lock.mutex());
             lock.lock();
         }
 
@@ -226,14 +238,16 @@ using DebugLock = UniqueLock<typename std::remove_reference<typename std::remove
 
 #define ENTER_CRITICAL_SECTION(cs)                            \
     {                                                         \
-        EnterCritical(#cs, __FILE__, __LINE__, (void*)(&cs)); \
+        EnterCritical(#cs, __FILE__, __LINE__, &cs); \
         (cs).lock();                                          \
     }
 
-#define LEAVE_CRITICAL_SECTION(cs) \
-    {                              \
-        (cs).unlock();             \
-        LeaveCritical();           \
+#define LEAVE_CRITICAL_SECTION(cs)                                          \
+    {                                                                       \
+        std::string lockname;                                               \
+        CheckLastCritical((void*)(&cs), lockname, #cs, __FILE__, __LINE__); \
+        (cs).unlock();                                                      \
+        LeaveCritical();                                                    \
     }
 
 //! Run code while locking a mutex.
@@ -340,20 +354,6 @@ public:
     {
         return fHaveGrant;
     }
-};
-
-// Utility class for indicating to compiler thread analysis that a mutex is
-// locked (when it couldn't be determined otherwise).
-struct SCOPED_LOCKABLE LockAssertion
-{
-    template <typename Mutex>
-    explicit LockAssertion(Mutex& mutex) EXCLUSIVE_LOCK_FUNCTION(mutex)
-    {
-#ifdef DEBUG_LOCKORDER
-        AssertLockHeld(mutex);
-#endif
-    }
-    ~LockAssertion() UNLOCK_FUNCTION() {}
 };
 
 #endif // BITCOIN_SYNC_H

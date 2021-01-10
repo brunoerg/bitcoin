@@ -24,7 +24,7 @@ bool IsValidSubtraction(const CScriptNum& lhs, const CScriptNum& rhs)
 }
 } // namespace
 
-void test_one_input(const std::vector<uint8_t>& buffer)
+FUZZ_TARGET(scriptnum_ops)
 {
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
     CScriptNum script_num = ConsumeScriptNum(fuzzed_data_provider);
@@ -33,7 +33,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
         case 0: {
             const int64_t i = fuzzed_data_provider.ConsumeIntegral<int64_t>();
             assert((script_num == i) != (script_num != i));
-            assert((script_num <= i) != script_num > i);
+            assert((script_num <= i) != (script_num > i));
             assert((script_num >= i) != (script_num < i));
             // Avoid signed integer overflow:
             // script/script.h:264:93: runtime error: signed integer overflow: -2261405121394637306 + -9223372036854775802 cannot be represented in type 'long'

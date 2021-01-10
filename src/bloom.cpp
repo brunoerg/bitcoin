@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 The Bitcoin Core developers
+// Copyright (c) 2012-2020 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -135,8 +135,8 @@ bool CBloomFilter::IsRelevantAndUpdate(const CTransaction& tx)
                 else if ((nFlags & BLOOM_UPDATE_MASK) == BLOOM_UPDATE_P2PUBKEY_ONLY)
                 {
                     std::vector<std::vector<unsigned char> > vSolutions;
-                    txnouttype type = Solver(txout.scriptPubKey, vSolutions);
-                    if (type == TX_PUBKEY || type == TX_MULTISIG) {
+                    TxoutType type = Solver(txout.scriptPubKey, vSolutions);
+                    if (type == TxoutType::PUBKEY || type == TxoutType::MULTISIG) {
                         insert(COutPoint(hash, i));
                     }
                 }
