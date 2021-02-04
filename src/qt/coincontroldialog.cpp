@@ -42,7 +42,7 @@ bool CCoinControlWidgetItem::operator<(const QTreeWidgetItem &other) const {
 }
 
 CoinControlDialog::CoinControlDialog(CCoinControl& coin_control, WalletModel* _model, const PlatformStyle *_platformStyle, QWidget *parent) :
-    QDialog(parent),
+    QDialog(parent, GUIUtil::dialog_flags),
     ui(new Ui::CoinControlDialog),
     m_coin_control(coin_control),
     model(_model),
@@ -455,7 +455,7 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, WalletModel *
         else if(ExtractDestination(out.txout.scriptPubKey, address))
         {
             CPubKey pubkey;
-            PKHash *pkhash = boost::get<PKHash>(&address);
+            PKHash* pkhash = std::get_if<PKHash>(&address);
             if (pkhash && model->wallet().getPubKey(out.txout.scriptPubKey, ToKeyID(*pkhash), pubkey))
             {
                 nBytesInputs += (pubkey.IsCompressed() ? 148 : 180);

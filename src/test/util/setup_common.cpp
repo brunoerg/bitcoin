@@ -131,7 +131,7 @@ ChainTestingSetup::ChainTestingSetup(const std::string& chainName, const std::ve
     // We have to run a scheduler thread to prevent ActivateBestChain
     // from blocking due to queue overrun.
     m_node.scheduler = MakeUnique<CScheduler>();
-    threadGroup.create_thread([&] { TraceThread("scheduler", [&] { m_node.scheduler->serviceQueue(); }); });
+    m_node.scheduler->m_service_thread = std::thread([&] { TraceThread("scheduler", [&] { m_node.scheduler->serviceQueue(); }); });
     GetMainSignals().RegisterBackgroundSignalScheduler(*m_node.scheduler);
 
     pblocktree.reset(new CBlockTreeDB(1 << 20, true));
@@ -143,17 +143,14 @@ ChainTestingSetup::ChainTestingSetup(const std::string& chainName, const std::ve
 
     // Start script-checking threads. Set g_parallel_script_checks to true so they are used.
     constexpr int script_check_threads = 2;
-    for (int i = 0; i < script_check_threads; ++i) {
-        threadGroup.create_thread([i]() { return ThreadScriptCheck(i); });
-    }
+    StartScriptCheckWorkerThreads(script_check_threads);
     g_parallel_script_checks = true;
 }
 
 ChainTestingSetup::~ChainTestingSetup()
 {
     if (m_node.scheduler) m_node.scheduler->stop();
-    threadGroup.interrupt_all();
-    threadGroup.join_all();
+    StopScriptCheckWorkerThreads();
     GetMainSignals().FlushBackgroundCallbacks();
     GetMainSignals().UnregisterBackgroundSignalScheduler();
     m_node.connman.reset();
@@ -186,15 +183,15 @@ TestingSetup::TestingSetup(const std::string& chainName, const std::vector<const
     }
 
     BlockValidationState state;
-    if (!ActivateBestChain(state, chainparams)) {
+    if (!::ChainstateActive().ActivateBestChain(state, chainparams)) {
         throw std::runtime_error(strprintf("ActivateBestChain failed. (%s)", state.ToString()));
     }
 
     m_node.banman = MakeUnique<BanMan>(GetDataDir() / "banlist.dat", nullptr, DEFAULT_MISBEHAVING_BANTIME);
     m_node.connman = MakeUnique<CConnman>(0x1337, 0x1337); // Deterministic randomness for tests.
-    m_node.peerman = std::make_unique<PeerManager>(chainparams, *m_node.connman, m_node.banman.get(),
-                                                   *m_node.scheduler, *m_node.chainman, *m_node.mempool,
-                                                   false);
+    m_node.peerman = PeerManager::make(chainparams, *m_node.connman, m_node.banman.get(),
+                                       *m_node.scheduler, *m_node.chainman, *m_node.mempool,
+                                       false);
     {
         CConnman::Options options;
         options.m_msgproc = m_node.peerman.get();

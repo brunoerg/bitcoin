@@ -15,13 +15,13 @@
 
 #include <amount.h>
 #include <coins.h>
-#include <crypto/siphash.h>
 #include <indirectmap.h>
 #include <optional.h>
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 #include <sync.h>
 #include <random.h>
+#include <util/hasher.h>
 
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/hashed_index.hpp>
@@ -398,20 +398,6 @@ enum class MemPoolRemovalReason {
     REPLACED,    //!< Removed for replacement
 };
 
-class SaltedTxidHasher
-{
-private:
-    /** Salt */
-    const uint64_t k0, k1;
-
-public:
-    SaltedTxidHasher();
-
-    size_t operator()(const uint256& txid) const {
-        return SipHashUint256(k0, k1, txid);
-    }
-};
-
 /**
  * CTxMemPool stores valid-according-to-the-current-best-chain transactions
  * that may be included in the next block.
@@ -616,7 +602,7 @@ public:
      * all inputs are in the mapNextTx array). If sanity-checking is turned off,
      * check does nothing.
      */
-    void check(const CCoinsViewCache *pcoins) const;
+    void check(const CCoinsViewCache *pcoins) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     // addUnchecked must updated state for all ancestors of a given transaction,
     // to track size/count of descendant transactions.  First version of

@@ -564,6 +564,9 @@ class CTransaction:
     def serialize(self):
         return self.serialize_with_witness()
 
+    def getwtxid(self):
+        return hash256(self.serialize())[::-1].hex()
+
     # Recalculate the txid (transaction hash without witness)
     def rehash(self):
         self.sha256 = None
@@ -579,7 +582,7 @@ class CTransaction:
 
         if self.sha256 is None:
             self.sha256 = uint256_from_str(hash256(self.serialize_without_witness()))
-        self.hash = encode(hash256(self.serialize_without_witness())[::-1], 'hex_codec').decode('ascii')
+        self.hash = hash256(self.serialize_without_witness())[::-1].hex()
 
     def is_valid(self):
         self.calc_sha256()
@@ -1270,7 +1273,7 @@ class msg_block:
 # for cases where a user needs tighter control over what is sent over the wire
 # note that the user must supply the name of the msgtype, and the data
 class msg_generic:
-    __slots__ = ("msgtype", "data")
+    __slots__ = ("data")
 
     def __init__(self, msgtype, data=None):
         self.msgtype = msgtype

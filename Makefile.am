@@ -25,6 +25,7 @@ BITCOIND_BIN=$(top_builddir)/src/$(BITCOIN_DAEMON_NAME)$(EXEEXT)
 BITCOIN_QT_BIN=$(top_builddir)/src/qt/$(BITCOIN_GUI_NAME)$(EXEEXT)
 BITCOIN_CLI_BIN=$(top_builddir)/src/$(BITCOIN_CLI_NAME)$(EXEEXT)
 BITCOIN_TX_BIN=$(top_builddir)/src/$(BITCOIN_TX_NAME)$(EXEEXT)
+BITCOIN_UTIL_BIN=$(top_builddir)/src/$(BITCOIN_UTIL_NAME)$(EXEEXT)
 BITCOIN_WALLET_BIN=$(top_builddir)/src/$(BITCOIN_WALLET_TOOL_NAME)$(EXEEXT)
 BITCOIN_NODE_BIN=$(top_builddir)/src/$(BITCOIN_MP_NODE_NAME)$(EXEEXT)
 BITCOIN_GUI_BIN=$(top_builddir)/src/$(BITCOIN_MP_GUI_NAME)$(EXEEXT)
@@ -45,6 +46,9 @@ OSX_INSTALLER_ICONS=$(top_srcdir)/src/qt/res/icons/bitcoin.icns
 OSX_PLIST=$(top_builddir)/share/qt/Info.plist #not installed
 
 DIST_CONTRIB = \
+	       $(top_srcdir)/test/sanitizer_suppressions/lsan \
+	       $(top_srcdir)/test/sanitizer_suppressions/tsan \
+	       $(top_srcdir)/test/sanitizer_suppressions/ubsan \
 	       $(top_srcdir)/contrib/linearize/linearize-data.py \
 	       $(top_srcdir)/contrib/linearize/linearize-hashes.py
 
@@ -81,6 +85,7 @@ $(BITCOIN_WIN_INSTALLER): all-recursive
 	STRIPPROG="$(STRIP)" $(INSTALL_STRIP_PROGRAM) $(BITCOIN_CLI_BIN) $(top_builddir)/release
 	STRIPPROG="$(STRIP)" $(INSTALL_STRIP_PROGRAM) $(BITCOIN_TX_BIN) $(top_builddir)/release
 	STRIPPROG="$(STRIP)" $(INSTALL_STRIP_PROGRAM) $(BITCOIN_WALLET_BIN) $(top_builddir)/release
+	STRIPPROG="$(STRIP)" $(INSTALL_STRIP_PROGRAM) $(BITCOIN_UTIL_BIN) $(top_builddir)/release
 	@test -f $(MAKENSIS) && echo 'OutFile "$@"' | cat $(top_builddir)/share/setup.nsi - | $(MAKENSIS) -V2 - || \
 	  echo error: could not build $@
 	@echo built $@
@@ -139,7 +144,7 @@ $(APP_DIST_DIR)/Applications:
 $(APP_DIST_EXTRAS): $(APP_DIST_DIR)/$(OSX_APP)/Contents/MacOS/Bitcoin-Qt
 
 $(OSX_TEMP_ISO): $(APP_DIST_EXTRAS)
-	$(XORRISOFS) -D -l -V "$(OSX_VOLNAME)" -no-pad -r -dir-mode 0755 -o $@ dist
+	$(XORRISOFS) -D -l -V "$(OSX_VOLNAME)" -no-pad -r -dir-mode 0755 -o $@ dist -- $(if $(SOURCE_DATE_EPOCH),-volume_date all_file_dates =$(SOURCE_DATE_EPOCH))
 
 $(OSX_DMG): $(OSX_TEMP_ISO)
 	$(DMG) dmg "$<" "$@"
@@ -175,6 +180,9 @@ $(BITCOIN_CLI_BIN): FORCE
 	$(MAKE) -C src $(@F)
 
 $(BITCOIN_TX_BIN): FORCE
+	$(MAKE) -C src $(@F)
+
+$(BITCOIN_UTIL_BIN): FORCE
 	$(MAKE) -C src $(@F)
 
 $(BITCOIN_WALLET_BIN): FORCE

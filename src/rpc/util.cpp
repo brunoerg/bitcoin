@@ -209,7 +209,7 @@ CTxDestination AddAndGetMultisigDestination(const int required, const std::vecto
     return dest;
 }
 
-class DescribeAddressVisitor : public boost::static_visitor<UniValue>
+class DescribeAddressVisitor
 {
 public:
     explicit DescribeAddressVisitor() {}
@@ -267,7 +267,7 @@ public:
 
 UniValue DescribeAddress(const CTxDestination& dest)
 {
-    return boost::apply_visitor(DescribeAddressVisitor(), dest);
+    return std::visit(DescribeAddressVisitor(), dest);
 }
 
 unsigned int ParseConfirmTarget(const UniValue& value, unsigned int max_target)
@@ -547,6 +547,24 @@ std::string RPCHelpMan::ToString() const
     ret += m_examples.ToDescriptionString();
 
     return ret;
+}
+
+void RPCHelpMan::AppendArgMap(UniValue& arr) const
+{
+    for (int i{0}; i < int(m_args.size()); ++i) {
+        const auto& arg = m_args.at(i);
+        std::vector<std::string> arg_names;
+        boost::split(arg_names, arg.m_names, boost::is_any_of("|"));
+        for (const auto& arg_name : arg_names) {
+            UniValue map{UniValue::VARR};
+            map.push_back(m_name);
+            map.push_back(i);
+            map.push_back(arg_name);
+            map.push_back(arg.m_type == RPCArg::Type::STR ||
+                          arg.m_type == RPCArg::Type::STR_HEX);
+            arr.push_back(map);
+        }
+    }
 }
 
 std::string RPCArg::GetFirstName() const

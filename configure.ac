@@ -23,6 +23,7 @@ BITCOIN_DAEMON_NAME=bitcoind
 BITCOIN_GUI_NAME=bitcoin-qt
 BITCOIN_CLI_NAME=bitcoin-cli
 BITCOIN_TX_NAME=bitcoin-tx
+BITCOIN_UTIL_NAME=bitcoin-util
 BITCOIN_WALLET_TOOL_NAME=bitcoin-wallet
 dnl Multi Process
 BITCOIN_MP_NODE_NAME=bitcoin-node
@@ -130,6 +131,12 @@ AC_ARG_WITH([bdb],
   [disable bdb wallet support (default is enabled if wallet is enabled)])],
   [use_bdb=$withval],
   [use_bdb=auto])
+
+AC_ARG_ENABLE([ebpf],
+  [AS_HELP_STRING([--enable-ebpf],
+  [enable eBPF tracing (default is yes if sys/sdt.h is found)])],
+  [use_ebpf=$enableval],
+  [use_ebpf=yes])
 
 AC_ARG_WITH([miniupnpc],
   [AS_HELP_STRING([--with-miniupnpc],
@@ -420,6 +427,7 @@ if test "x$enable_werror" = "xyes"; then
   AX_CHECK_COMPILE_FLAG([-Werror=suggest-override],[ERROR_CXXFLAGS="$ERROR_CXXFLAGS -Werror=suggest-override"],,[[$CXXFLAG_WERROR]],
                         [AC_LANG_SOURCE([[struct A { virtual void f(); }; struct B : A { void f() final; };]])])
   AX_CHECK_COMPILE_FLAG([-Werror=unreachable-code-loop-increment],[ERROR_CXXFLAGS="$ERROR_CXXFLAGS -Werror=unreachable-code-loop-increment"],,[[$CXXFLAG_WERROR]])
+  AX_CHECK_COMPILE_FLAG([-Werror=mismatched-tags], [ERROR_CXXFLAGS="$ERROR_CXXFLAGS -Werror=mismatched-tags"], [], [$CXXFLAG_WERROR])
 fi
 
 if test "x$CXXFLAGS_overridden" = "xno"; then
@@ -571,7 +579,7 @@ CPPFLAGS="$CPPFLAGS -DHAVE_BUILD_INFO -D__STDC_FORMAT_MACROS"
 
 AC_ARG_WITH([utils],
   [AS_HELP_STRING([--with-utils],
-  [build bitcoin-cli bitcoin-tx bitcoin-wallet (default=yes)])],
+  [build bitcoin-cli bitcoin-tx bitcoin-util bitcoin-wallet (default=yes)])],
   [build_bitcoin_utils=$withval],
   [build_bitcoin_utils=yes])
 
@@ -592,6 +600,12 @@ AC_ARG_ENABLE([util-wallet],
   [build bitcoin-wallet])],
   [build_bitcoin_wallet=$enableval],
   [build_bitcoin_wallet=$build_bitcoin_utils])
+
+AC_ARG_ENABLE([util-util],
+  [AS_HELP_STRING([--enable-util-util],
+  [build bitcoin-util])],
+  [build_bitcoin_util=$enableval],
+  [build_bitcoin_util=$build_bitcoin_utils])
 
 AC_ARG_WITH([libs],
   [AS_HELP_STRING([--with-libs],
@@ -800,6 +814,11 @@ AX_GCC_FUNC_ATTRIBUTE([dllimport])
 if test x$use_glibc_compat != xno; then
   AX_CHECK_LINK_FLAG([[-Wl,--wrap=__divmoddi4]], [COMPAT_LDFLAGS="$COMPAT_LDFLAGS -Wl,--wrap=__divmoddi4"])
   AX_CHECK_LINK_FLAG([[-Wl,--wrap=log2f]], [COMPAT_LDFLAGS="$COMPAT_LDFLAGS -Wl,--wrap=log2f"])
+  case $host in
+    powerpc64* | ppc64*)
+      AX_CHECK_LINK_FLAG([[-Wl,--no-tls-get-addr-optimize]], [COMPAT_LDFLAGS="$COMPAT_LDFLAGS -Wl,--no-tls-get-addr-optimize"])
+    ;;
+  esac
 else
   AC_SEARCH_LIBS([clock_gettime],[rt])
 fi
@@ -1209,6 +1228,7 @@ if test "x$enable_fuzz" = "xyes"; then
   build_bitcoin_utils=no
   build_bitcoin_cli=no
   build_bitcoin_tx=no
+  build_bitcoin_util=no
   build_bitcoin_wallet=no
   build_bitcoind=no
   build_bitcoin_libs=no
@@ -1285,6 +1305,16 @@ if test x$enable_wallet != xno; then
         fi
         enable_wallet=no
     fi
+fi
+
+if test x$use_ebpf != xno; then
+  AC_CHECK_HEADER([sys/sdt.h], [have_sdt=yes], [have_sdt=no])
+else
+  have_sdt=no
+fi
+
+if test x$have_sdt = xyes; then
+  AC_DEFINE([ENABLE_TRACING], [1], [Define to 1 to enable eBPF user static defined tracepoints])
 fi
 
 dnl Check for libminiupnpc (optional)
@@ -1433,7 +1463,7 @@ fi
 dnl univalue check
 
 need_bundled_univalue=yes
-if test x$build_bitcoin_wallet$build_bitcoin_cli$build_bitcoin_tx$build_bitcoind$bitcoin_enable_qt$use_tests$use_bench = xnonononononono; then
+if test x$build_bitcoin_wallet$build_bitcoin_cli$build_bitcoin_tx$build_bitcoin_util$build_bitcoind$bitcoin_enable_qt$use_tests$use_bench = xnononononononono; then
   need_bundled_univalue=no
 else
   if test x$system_univalue != xno; then
@@ -1515,6 +1545,10 @@ AC_MSG_RESULT($build_bitcoin_tx)
 AC_MSG_CHECKING([whether to build bitcoin-wallet])
 AM_CONDITIONAL([BUILD_BITCOIN_WALLET], [test x$build_bitcoin_wallet = xyes])
 AC_MSG_RESULT($build_bitcoin_wallet)
+
+AC_MSG_CHECKING([whether to build bitcoin-util])
+AM_CONDITIONAL([BUILD_BITCOIN_UTIL], [test x$build_bitcoin_util = xyes])
+AC_MSG_RESULT($build_bitcoin_util)
 
 AC_MSG_CHECKING([whether to build libraries])
 AM_CONDITIONAL([BUILD_BITCOIN_LIBS], [test x$build_bitcoin_libs = xyes])
@@ -1677,6 +1711,7 @@ AM_CONDITIONAL([TARGET_WINDOWS], [test x$TARGET_OS = xwindows])
 AM_CONDITIONAL([ENABLE_WALLET],[test x$enable_wallet = xyes])
 AM_CONDITIONAL([USE_SQLITE], [test "x$use_sqlite" = "xyes"])
 AM_CONDITIONAL([USE_BDB], [test "x$use_bdb" = "xyes"])
+AM_CONDITIONAL([ENABLE_TRACING],[test x$have_sdt = xyes])
 AM_CONDITIONAL([ENABLE_TESTS],[test x$BUILD_TEST = xyes])
 AM_CONDITIONAL([ENABLE_FUZZ],[test x$enable_fuzz = xyes])
 AM_CONDITIONAL([ENABLE_FUZZ_LINK_ALL],[test x$enable_danger_fuzz_link_all = xyes])
@@ -1717,6 +1752,7 @@ AC_SUBST(BITCOIN_DAEMON_NAME)
 AC_SUBST(BITCOIN_GUI_NAME)
 AC_SUBST(BITCOIN_CLI_NAME)
 AC_SUBST(BITCOIN_TX_NAME)
+AC_SUBST(BITCOIN_UTIL_NAME)
 AC_SUBST(BITCOIN_WALLET_TOOL_NAME)
 AC_SUBST(BITCOIN_MP_NODE_NAME)
 AC_SUBST(BITCOIN_MP_GUI_NAME)
@@ -1842,6 +1878,7 @@ echo "  with bench    = $use_bench"
 echo "  with upnp     = $use_upnp"
 echo "  with natpmp   = $use_natpmp"
 echo "  use asm       = $use_asm"
+echo "  ebpf tracing  = $have_sdt"
 echo "  sanitizers    = $use_sanitizers"
 echo "  debug enabled = $enable_debug"
 echo "  gprof enabled = $enable_gprof"

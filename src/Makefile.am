@@ -2,6 +2,10 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+# Pattern rule to print variables, e.g. make print-top_srcdir
+print-%:
+	@echo $* = $($*)
+
 DIST_SUBDIRS = secp256k1 univalue
 
 AM_LDFLAGS = $(LIBTOOL_LDFLAGS) $(HARDENED_LDFLAGS) $(GPROF_LDFLAGS) $(SANITIZER_LDFLAGS)
@@ -92,13 +96,19 @@ endif
 if BUILD_BITCOIN_CLI
   bin_PROGRAMS += bitcoin-cli
 endif
+
 if BUILD_BITCOIN_TX
   bin_PROGRAMS += bitcoin-tx
 endif
+
 if ENABLE_WALLET
 if BUILD_BITCOIN_WALLET
   bin_PROGRAMS += bitcoin-wallet
 endif
+endif
+
+if BUILD_BITCOIN_UTIL
+  bin_PROGRAMS += bitcoin-util
 endif
 
 .PHONY: FORCE check-symbols check-security
@@ -224,6 +234,7 @@ BITCOIN_CORE_H = \
   util/error.h \
   util/fees.h \
   util/golombrice.h \
+  util/hasher.h \
   util/macros.h \
   util/memory.h \
   util/message.h \
@@ -236,6 +247,7 @@ BITCOIN_CORE_H = \
   util/system.h \
   util/threadnames.h \
   util/time.h \
+  util/trace.h \
   util/translation.h \
   util/ui_change_type.h \
   util/url.h \
@@ -544,6 +556,7 @@ libbitcoin_util_a_SOURCES = \
   util/bytevectorhash.cpp \
   util/error.cpp \
   util/fees.cpp \
+  util/hasher.cpp \
   util/system.cpp \
   util/message.cpp \
   util/moneystr.cpp \
@@ -664,6 +677,27 @@ bitcoin_wallet_LDADD = $(LIBBITCOIN_WALLET_TOOL) $(bitcoin_bin_ldadd)
 if TARGET_WINDOWS
 bitcoin_wallet_SOURCES += bitcoin-wallet-res.rc
 endif
+#
+
+# bitcoin-util binary #
+bitcoin_util_SOURCES = bitcoin-util.cpp
+bitcoin_util_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES)
+bitcoin_util_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
+bitcoin_util_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS)
+
+if TARGET_WINDOWS
+bitcoin_util_SOURCES += bitcoin-util-res.rc
+endif
+
+bitcoin_util_LDADD = \
+  $(LIBBITCOIN_COMMON) \
+  $(LIBBITCOIN_UTIL) \
+  $(LIBUNIVALUE) \
+  $(LIBBITCOIN_CONSENSUS) \
+  $(LIBBITCOIN_CRYPTO) \
+  $(LIBSECP256K1)
+
+bitcoin_util_LDADD += $(BOOST_LIBS)
 #
 
 # bitcoinconsensus library #

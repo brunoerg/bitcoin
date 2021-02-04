@@ -618,6 +618,7 @@ void CTxMemPool::check(const CCoinsViewCache *pcoins) const
 
     if (GetRand(m_check_ratio) >= 1) return;
 
+    AssertLockHeld(::cs_main);
     LOCK(cs);
     LogPrint(BCLog::MEMPOOL, "Checking mempool with %u transactions and %u inputs\n", (unsigned int)mapTx.size(), (unsigned int)mapNextTx.size());
 
@@ -625,7 +626,7 @@ void CTxMemPool::check(const CCoinsViewCache *pcoins) const
     uint64_t innerUsage = 0;
 
     CCoinsViewCache mempoolDuplicate(const_cast<CCoinsViewCache*>(pcoins));
-    const int64_t spendheight = GetSpendHeight(mempoolDuplicate);
+    const int64_t spendheight = g_chainman.m_blockman.GetSpendHeight(mempoolDuplicate);
 
     std::list<const CTxMemPoolEntry*> waitingOnDependants;
     for (indexed_transaction_set::const_iterator it = mapTx.begin(); it != mapTx.end(); it++) {
@@ -1127,5 +1128,3 @@ CTxMemPool::EpochGuard::~EpochGuard()
     ++pool.m_epoch;
     pool.m_has_epoch_guard = false;
 }
-
-SaltedTxidHasher::SaltedTxidHasher() : k0(GetRand(std::numeric_limits<uint64_t>::max())), k1(GetRand(std::numeric_limits<uint64_t>::max())) {}

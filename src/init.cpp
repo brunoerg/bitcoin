@@ -68,6 +68,8 @@
 #include <set>
 #include <stdint.h>
 #include <stdio.h>
+#include <thread>
+#include <vector>
 
 #ifndef WIN32
 #include <attributes.h>
@@ -78,7 +80,6 @@
 
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/signals2/signal.hpp>
-#include <boost/thread/thread.hpp>
 
 #if ENABLE_ZMQ
 #include <zmq/zmqabstractnotifier.h>
@@ -155,8 +156,6 @@ static std::unique_ptr<ECCVerifyHandle> globalVerifyHandle;
 
 static std::thread g_load_block;
 
-static boost::thread_group threadGroup;
-
 void Interrupt(NodeContext& node)
 {
     InterruptHTTPServer();
@@ -218,11 +217,10 @@ void Shutdown(NodeContext& node)
     StopTorControl();
 
     // After everything has been shut down, but before things get flushed, stop the
-    // CScheduler/checkqueue, threadGroup and load block thread.
+    // CScheduler/checkqueue, scheduler and load block thread.
     if (node.scheduler) node.scheduler->stop();
     if (g_load_block.joinable()) g_load_block.join();
-    threadGroup.interrupt_all();
-    threadGroup.join_all();
+    StopScriptCheckWorkerThreads();
 
     // After the threads that potentially access these pointers have been stopped,
     // destruct and reset all to nullptr.
@@ -447,7 +445,7 @@ void SetupServerArgs(NodeContext& node)
     argsman.AddArg("-maxtimeadjustment", strprintf("Maximum allowed median peer time offset adjustment. Local perspective of time may be influenced by peers forward or backward by this amount. (default: %u seconds)", DEFAULT_MAX_TIME_ADJUSTMENT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxuploadtarget=<n>", strprintf("Tries to keep outbound traffic under the given target (in MiB per 24h). Limit does not apply to peers with 'download' permission. 0 = no limit (default: %d)", DEFAULT_MAX_UPLOAD_TARGET), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-onion=<ip:port>", "Use separate SOCKS5 proxy to reach peers via Tor onion services, set -noonion to disable (default: -proxy)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-onlynet=<net>", "Make outgoing connections only through network <net> (ipv4, ipv6 or onion). Incoming connections are not affected by this option. This option can be specified multiple times to allow multiple networks.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-onlynet=<net>", "Make outgoing connections only through network <net> (ipv4, ipv6 or onion). Incoming connections are not affected by this option. This option can be specified multiple times to allow multiple networks. Warning: if it is used with ipv4 or ipv6 but not onion and the -onion or -proxy option is set, then outbound onion connections will still be made; use -noonion or -onion=0 to disable outbound onion connections in this case.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-peerbloomfilters", strprintf("Support filtering of blocks and transaction with bloom filters (default: %u)", DEFAULT_PEERBLOOMFILTERS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-peerblockfilters", strprintf("Serve compact block filters to peers per BIP 157 (default: %u)", DEFAULT_PEERBLOCKFILTERS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-permitbaremultisig", strprintf("Relay non-P2SH multisig (default: %u)", DEFAULT_PERMIT_BAREMULTISIG), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
@@ -521,10 +519,11 @@ void SetupServerArgs(NodeContext& node)
     argsman.AddArg("-limitdescendantcount=<n>", strprintf("Do not accept transactions if any ancestor would have <n> or more in-mempool descendants (default: %u)", DEFAULT_DESCENDANT_LIMIT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-limitdescendantsize=<n>", strprintf("Do not accept transactions if any ancestor would have more than <n> kilobytes of in-mempool descendants (default: %u).", DEFAULT_DESCENDANT_SIZE_LIMIT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-addrmantest", "Allows to test address relay on localhost", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-capturemessages", "Capture all P2P messages to disk", ArgsManager::ALLOW_BOOL | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-debug=<category>", "Output debugging information (default: -nodebug, supplying <category> is optional). "
-        "If <category> is not supplied or if <category> = 1, output all debugging information. <category> can be: " + LogInstance().LogCategoriesString() + ".",
+        "If <category> is not supplied or if <category> = 1, output all debugging information. <category> can be: " + LogInstance().LogCategoriesString() + ". This option can be specified multiple times to output multiple categories.",
         ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
-    argsman.AddArg("-debugexclude=<category>", strprintf("Exclude debugging information for a category. Can be used in conjunction with -debug=1 to output debug logs for all categories except one or more specified categories."), ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-debugexclude=<category>", strprintf("Exclude debugging information for a category. Can be used in conjunction with -debug=1 to output debug logs for all categories except the specified category. This option can be specified multiple times to exclude multiple categories."), ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-logips", strprintf("Include IP addresses in debug output (default: %u)", DEFAULT_LOGIPS), ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-logtimestamps", strprintf("Prepend debug output with timestamp (default: %u)", DEFAULT_LOGTIMESTAMPS), ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
 #ifdef HAVE_THREAD_LOCAL
@@ -704,7 +703,7 @@ static void ThreadImport(ChainstateManager& chainman, std::vector<fs::path> vImp
             if (!file)
                 break; // This error is logged in OpenBlockFile
             LogPrintf("Reindexing block file blk%05u.dat...\n", (unsigned int)nFile);
-            LoadExternalBlockFile(chainparams, file, &pos);
+            ::ChainstateActive().LoadExternalBlockFile(chainparams, file, &pos);
             if (ShutdownRequested()) {
                 LogPrintf("Shutdown requested. Exit %s\n", __func__);
                 return;
@@ -723,7 +722,7 @@ static void ThreadImport(ChainstateManager& chainman, std::vector<fs::path> vImp
         FILE *file = fsbridge::fopen(path, "rb");
         if (file) {
             LogPrintf("Importing blocks file %s...\n", path.string());
-            LoadExternalBlockFile(chainparams, file);
+            ::ChainstateActive().LoadExternalBlockFile(chainparams, file);
             if (ShutdownRequested()) {
                 LogPrintf("Shutdown requested. Exit %s\n", __func__);
                 return;
@@ -1042,16 +1041,17 @@ bool AppInitParameterInteraction(const ArgsManager& args)
 
     // Trim requested connection counts, to fit into system limitations
     // <int> in std::min<int>(...) to work around FreeBSD compilation issue described in #2695
-    nFD = RaiseFileDescriptorLimit(nMaxConnections + MIN_CORE_FILEDESCRIPTORS + MAX_ADDNODE_CONNECTIONS + nBind);
+    nFD = RaiseFileDescriptorLimit(nMaxConnections + MIN_CORE_FILEDESCRIPTORS + MAX_ADDNODE_CONNECTIONS + nBind + NUM_FDS_MESSAGE_CAPTURE);
+
 #ifdef USE_POLL
     int fd_max = nFD;
 #else
     int fd_max = FD_SETSIZE;
 #endif
-    nMaxConnections = std::max(std::min<int>(nMaxConnections, fd_max - nBind - MIN_CORE_FILEDESCRIPTORS - MAX_ADDNODE_CONNECTIONS), 0);
+    nMaxConnections = std::max(std::min<int>(nMaxConnections, fd_max - nBind - MIN_CORE_FILEDESCRIPTORS - MAX_ADDNODE_CONNECTIONS - NUM_FDS_MESSAGE_CAPTURE), 0);
     if (nFD < MIN_CORE_FILEDESCRIPTORS)
         return InitError(_("Not enough file descriptors available."));
-    nMaxConnections = std::min(nFD - MIN_CORE_FILEDESCRIPTORS - MAX_ADDNODE_CONNECTIONS, nMaxConnections);
+    nMaxConnections = std::min(nFD - MIN_CORE_FILEDESCRIPTORS - MAX_ADDNODE_CONNECTIONS - NUM_FDS_MESSAGE_CAPTURE, nMaxConnections);
 
     if (nMaxConnections < nUserMaxConnections)
         InitWarning(strprintf(_("Reducing -maxconnections from %d to %d, because of system limitations."), nUserMaxConnections, nMaxConnections));
@@ -1334,16 +1334,14 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
     LogPrintf("Script verification uses %d additional threads\n", script_threads);
     if (script_threads >= 1) {
         g_parallel_script_checks = true;
-        for (int i = 0; i < script_threads; ++i) {
-            threadGroup.create_thread([i]() { return ThreadScriptCheck(i); });
-        }
+        StartScriptCheckWorkerThreads(script_threads);
     }
 
     assert(!node.scheduler);
     node.scheduler = MakeUnique<CScheduler>();
 
     // Start the lightweight task scheduler thread
-    threadGroup.create_thread([&] { TraceThread("scheduler", [&] { node.scheduler->serviceQueue(); }); });
+    node.scheduler->m_service_thread = std::thread([&] { TraceThread("scheduler", [&] { node.scheduler->serviceQueue(); }); });
 
     // Gather some entropy once per minute.
     node.scheduler->scheduleEvery([]{
@@ -1410,8 +1408,8 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
     ChainstateManager& chainman = *Assert(node.chainman);
 
     assert(!node.peerman);
-    node.peerman = std::make_unique<PeerManager>(chainparams, *node.connman, node.banman.get(),
-                                                 *node.scheduler, chainman, *node.mempool, ignores_incoming_txs);
+    node.peerman = PeerManager::make(chainparams, *node.connman, node.banman.get(),
+                                     *node.scheduler, chainman, *node.mempool, ignores_incoming_txs);
     RegisterValidationInterface(node.peerman.get());
 
     // sanitize comments per BIP-0014, format user agent and check total size
@@ -1612,7 +1610,7 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
                 // If the loaded chain has a wrong genesis, bail out immediately
                 // (we're likely using a testnet datadir, or the other way around).
                 if (!chainman.BlockIndex().empty() &&
-                        !LookupBlockIndex(chainparams.GetConsensus().hashGenesisBlock)) {
+                        !g_chainman.m_blockman.LookupBlockIndex(chainparams.GetConsensus().hashGenesisBlock)) {
                     return InitError(_("Incorrect or no genesis block found. Wrong datadir for network?"));
                 }
 

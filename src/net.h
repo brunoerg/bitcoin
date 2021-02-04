@@ -20,6 +20,7 @@
 #include <policy/feerate.h>
 #include <protocol.h>
 #include <random.h>
+#include <span.h>
 #include <streams.h>
 #include <sync.h>
 #include <threadinterrupt.h>
@@ -75,6 +76,8 @@ static constexpr uint64_t DEFAULT_MAX_UPLOAD_TARGET = 0;
 static const bool DEFAULT_BLOCKSONLY = false;
 /** -peertimeout default */
 static const int64_t DEFAULT_PEER_CONNECT_TIMEOUT = 60;
+/** Number of file descriptors required for message capture **/
+static const int NUM_FDS_MESSAGE_CAPTURE = 1;
 
 static const bool DEFAULT_FORCEDNSSEED = false;
 static const size_t DEFAULT_MAXRECEIVEBUFFER = 5 * 1000;
@@ -111,7 +114,8 @@ struct CSerializedNetMsg
  * connection. Aside from INBOUND, all types are initiated by us.
  *
  * If adding or removing types, please update CONNECTION_TYPE_DOC in
- * src/rpc/net.cpp. */
+ * src/rpc/net.cpp and src/qt/rpcconsole.cpp, as well as the descriptions in
+ * src/qt/guiutil.cpp and src/bitcoin-cli.cpp::NetinfoRequestHandler. */
 enum class ConnectionType {
     /**
      * Inbound connections are those initiated by a peer. This is the only
@@ -122,7 +126,7 @@ enum class ConnectionType {
 
     /**
      * These are the default connections that we use to connect with the
-     * network. There is no restriction on what is relayed- by default we relay
+     * network. There is no restriction on what is relayed; by default we relay
      * blocks, addresses & transactions. We automatically attempt to open
      * MAX_OUTBOUND_FULL_RELAY_CONNECTIONS using addresses from our AddrMan.
      */
@@ -130,8 +134,8 @@ enum class ConnectionType {
 
 
     /**
-     * We open manual connections to addresses that users explicitly inputted
-     * via the addnode RPC, or the -connect command line argument. Even if a
+     * We open manual connections to addresses that users explicitly requested
+     * via the addnode RPC or the -addnode/-connect configuration options. Even if a
      * manual connection is misbehaving, we do not automatically disconnect or
      * add it to our discouragement filter.
      */
@@ -150,7 +154,7 @@ enum class ConnectionType {
      * although in our codebase feeler connections encompass test-before-evict as well.
      * We make these connections approximately every FEELER_INTERVAL:
      * first we resolve previously found collisions if they exist (test-before-evict),
-     * otherwise connect to a node from the new table.
+     * otherwise we connect to a node from the new table.
      */
     FEELER,
 
@@ -528,11 +532,6 @@ public:
      */
     Network ConnectedThroughNetwork() const;
 
-protected:
-    mapMsgCmdSize mapSendBytesPerMsgCmd GUARDED_BY(cs_vSend);
-    mapMsgCmdSize mapRecvBytesPerMsgCmd GUARDED_BY(cs_vRecv);
-
-public:
     // We selected peer as (compact blocks) high-bandwidth peer (BIP152)
     std::atomic<bool> m_bip152_highbandwidth_to{false};
     // Peer selected us as (compact blocks) high-bandwidth peer (BIP152)
@@ -565,9 +564,8 @@ public:
         std::atomic<std::chrono::seconds> m_last_mempool_req{0s};
         std::chrono::microseconds nNextInvSend{0};
 
-        RecursiveMutex cs_feeFilter;
-        // Minimum fee rate with which to filter inv's to this node
-        CAmount minFeeFilter GUARDED_BY(cs_feeFilter){0};
+        /** Minimum fee rate with which to filter inv's to this node */
+        std::atomic<CAmount> minFeeFilter{0};
         CAmount lastSentFeeFilter{0};
         int64_t nextSendTimeFeeFilter{0};
     };
@@ -604,43 +602,6 @@ public:
     ~CNode();
     CNode(const CNode&) = delete;
     CNode& operator=(const CNode&) = delete;
-
-private:
-    const NodeId id;
-    const uint64_t nLocalHostNonce;
-    const ConnectionType m_conn_type;
-    std::atomic<int> m_greatest_common_version{INIT_PROTO_VERSION};
-
-    //! Services offered to this peer.
-    //!
-    //! This is supplied by the parent CConnman during peer connection
-    //! (CConnman::ConnectNode()) from its attribute of the same name.
-    //!
-    //! This is const because there is no protocol defined for renegotiating
-    //! services initially offered to a peer. The set of local services we
-    //! offer should not change after initialization.
-    //!
-    //! An interesting example of this is NODE_NETWORK and initial block
-    //! download: a node which starts up from scratch doesn't have any blocks
-    //! to serve, but still advertises NODE_NETWORK because it will eventually
-    //! fulfill this role after IBD completes. P2P code is written in such a
-    //! way that it can gracefully handle peers who don't make good on their
-    //! service advertisements.
-    const ServiceFlags nLocalServices;
-
-    std::list<CNetMessage> vRecvMsg;  // Used only by SocketHandler thread
-
-    mutable RecursiveMutex cs_addrName;
-    std::string addrName GUARDED_BY(cs_addrName);
-
-    // Our address, as reported by the peer
-    CService addrLocal GUARDED_BY(cs_addrLocal);
-    mutable RecursiveMutex cs_addrLocal;
-
-    //! Whether this peer is an inbound onion, e.g. connected via our Tor onion service.
-    const bool m_inbound_onion{false};
-
-public:
 
     NodeId GetId() const {
         return id;
@@ -692,8 +653,6 @@ public:
         nRefCount--;
     }
 
-
-
     void AddAddressKnown(const CAddress& _addr)
     {
         assert(m_addr_known);
@@ -724,7 +683,6 @@ public:
             }
         }
     }
-
 
     void AddKnownTx(const uint256& hash)
     {
@@ -760,6 +718,44 @@ public:
 
     /** Whether this peer is an inbound onion, e.g. connected via our Tor onion service. */
     bool IsInboundOnion() const { return m_inbound_onion; }
+
+private:
+    const NodeId id;
+    const uint64_t nLocalHostNonce;
+    const ConnectionType m_conn_type;
+    std::atomic<int> m_greatest_common_version{INIT_PROTO_VERSION};
+
+    //! Services offered to this peer.
+    //!
+    //! This is supplied by the parent CConnman during peer connection
+    //! (CConnman::ConnectNode()) from its attribute of the same name.
+    //!
+    //! This is const because there is no protocol defined for renegotiating
+    //! services initially offered to a peer. The set of local services we
+    //! offer should not change after initialization.
+    //!
+    //! An interesting example of this is NODE_NETWORK and initial block
+    //! download: a node which starts up from scratch doesn't have any blocks
+    //! to serve, but still advertises NODE_NETWORK because it will eventually
+    //! fulfill this role after IBD completes. P2P code is written in such a
+    //! way that it can gracefully handle peers who don't make good on their
+    //! service advertisements.
+    const ServiceFlags nLocalServices;
+
+    std::list<CNetMessage> vRecvMsg;  // Used only by SocketHandler thread
+
+    mutable RecursiveMutex cs_addrName;
+    std::string addrName GUARDED_BY(cs_addrName);
+
+    // Our address, as reported by the peer
+    CService addrLocal GUARDED_BY(cs_addrLocal);
+    mutable RecursiveMutex cs_addrLocal;
+
+    //! Whether this peer is an inbound onion, e.g. connected via our Tor onion service.
+    const bool m_inbound_onion{false};
+
+    mapMsgCmdSize mapSendBytesPerMsgCmd GUARDED_BY(cs_vSend);
+    mapMsgCmdSize mapRecvBytesPerMsgCmd GUARDED_BY(cs_vRecv);
 };
 
 /**
@@ -768,10 +764,29 @@ public:
 class NetEventsInterface
 {
 public:
-    virtual bool ProcessMessages(CNode* pnode, std::atomic<bool>& interrupt) = 0;
-    virtual bool SendMessages(CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(pnode->cs_sendProcessing) = 0;
+    /** Initialize a peer (setup state, queue any initial messages) */
     virtual void InitializeNode(CNode* pnode) = 0;
+
+    /** Handle removal of a peer (clear state) */
     virtual void FinalizeNode(const CNode& node, bool& update_connection_time) = 0;
+
+    /**
+    * Process protocol messages received from a given node
+    *
+    * @param[in]   pnode           The node which we have received messages from.
+    * @param[in]   interrupt       Interrupt condition for processing threads
+    * @return                      True if there is more work to be done
+    */
+    virtual bool ProcessMessages(CNode* pnode, std::atomic<bool>& interrupt) = 0;
+
+    /**
+    * Send queued protocol messages to a given node.
+    *
+    * @param[in]   pnode           The node which we are sending messages to.
+    * @return                      True if there is more work to be done
+    */
+    virtual bool SendMessages(CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(pnode->cs_sendProcessing) = 0;
+
 
 protected:
     /**
@@ -946,6 +961,19 @@ public:
     bool RemoveAddedNode(const std::string& node);
     std::vector<AddedNodeInfo> GetAddedNodeInfo();
 
+    /**
+     * Attempts to open a connection. Currently only used from tests.
+     *
+     * @param[in]   address     Address of node to try connecting to
+     * @param[in]   conn_type   ConnectionType::OUTBOUND or ConnectionType::BLOCK_RELAY
+     * @return      bool        Returns false if there are no available
+     *                          slots for this connection:
+     *                          - conn_type not a supported ConnectionType
+     *                          - Max total outbound connection capacity filled
+     *                          - Max connection capacity for type is filled
+     */
+    bool AddConnection(const std::string& address, ConnectionType conn_type);
+
     size_t GetNodeCount(NumConnections num);
     void GetNodeStats(std::vector<CNodeStats>& vstats);
     bool DisconnectNode(const std::string& node);
@@ -1020,7 +1048,8 @@ private:
     void AcceptConnection(const ListenSocket& hListenSocket);
     void DisconnectNodes();
     void NotifyNumConnectionsChanged();
-    void InactivityCheck(CNode *pnode) const;
+    /** Return true if the peer is inactive and should be disconnected. */
+    bool InactivityCheck(const CNode& node) const;
     bool GenerateSelectSet(std::set<SOCKET> &recv_set, std::set<SOCKET> &send_set, std::set<SOCKET> &error_set);
     void SocketEvents(std::set<SOCKET> &recv_set, std::set<SOCKET> &send_set, std::set<SOCKET> &error_set);
     void SocketHandler();
@@ -1214,6 +1243,9 @@ inline std::chrono::microseconds PoissonNextSend(std::chrono::microseconds now, 
 {
     return std::chrono::microseconds{PoissonNextSend(now.count(), average_interval.count())};
 }
+
+/** Dump binary message to file, with timestamp */
+void CaptureMessage(const CAddress& addr, const std::string& msg_type, const Span<const unsigned char>& data, bool is_incoming);
 
 struct NodeEvictionCandidate
 {

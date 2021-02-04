@@ -19,7 +19,7 @@
 #include <QClipboard>
 
 SignVerifyMessageDialog::SignVerifyMessageDialog(const PlatformStyle *_platformStyle, QWidget *parent) :
-    QDialog(parent),
+    QDialog(parent, GUIUtil::dialog_flags),
     ui(new Ui::SignVerifyMessageDialog),
     model(nullptr),
     platformStyle(_platformStyle)
@@ -120,7 +120,7 @@ void SignVerifyMessageDialog::on_signMessageButton_SM_clicked()
         ui->statusLabel_SM->setText(tr("The entered address is invalid.") + QString(" ") + tr("Please check the address and try again."));
         return;
     }
-    const PKHash* pkhash = boost::get<PKHash>(&destination);
+    const PKHash* pkhash = std::get_if<PKHash>(&destination);
     if (!pkhash) {
         ui->addressIn_SM->setValid(false);
         ui->statusLabel_SM->setStyleSheet("QLabel { color: red; }");

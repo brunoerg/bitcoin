@@ -15,7 +15,7 @@
 
 void initialize_load_external_block_file()
 {
-    InitializeFuzzingContext();
+    static const auto testing_setup = MakeFuzzingContext<const TestingSetup>();
 }
 
 FUZZ_TARGET_INIT(load_external_block_file, initialize_load_external_block_file)
@@ -27,5 +27,5 @@ FUZZ_TARGET_INIT(load_external_block_file, initialize_load_external_block_file)
         return;
     }
     FlatFilePos flat_file_pos;
-    LoadExternalBlockFile(Params(), fuzzed_block_file, fuzzed_data_provider.ConsumeBool() ? &flat_file_pos : nullptr);
+    ::ChainstateActive().LoadExternalBlockFile(Params(), fuzzed_block_file, fuzzed_data_provider.ConsumeBool() ? &flat_file_pos : nullptr);
 }

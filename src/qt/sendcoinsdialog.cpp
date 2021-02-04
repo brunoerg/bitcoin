@@ -55,7 +55,7 @@ int getIndexForConfTarget(int target) {
 }
 
 SendCoinsDialog::SendCoinsDialog(const PlatformStyle *_platformStyle, QWidget *parent) :
-    QDialog(parent),
+    QDialog(parent, GUIUtil::dialog_flags),
     ui(new Ui::SendCoinsDialog),
     clientModel(nullptr),
     model(nullptr),
@@ -973,6 +973,9 @@ SendConfirmationDialog::SendConfirmationDialog(const QString& title, const QStri
     setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
     setDefaultButton(QMessageBox::Cancel);
     yesButton = button(QMessageBox::Yes);
+    if (confirmButtonText.isEmpty()) {
+        confirmButtonText = yesButton->text();
+    }
     updateYesButton();
     connect(&countDownTimer, &QTimer::timeout, this, &SendConfirmationDialog::countDown);
 }
