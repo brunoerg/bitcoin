@@ -115,7 +115,8 @@ http://www.linuxfromscratch.org/hlfs/view/development/chapter05/gcc-pass1.html"
        `(("binutils" ,xbinutils)
          ("libc" ,xlibc)
          ("libc:static" ,xlibc "static")
-         ("gcc" ,xgcc)))
+         ("gcc" ,xgcc)
+         ("gcc-lib" ,xgcc "lib")))
       (synopsis (string-append "Complete GCC tool chain for " target))
       (description (string-append "This package provides a complete GCC tool
 chain for " target " development."))
@@ -159,7 +160,8 @@ desirable for building Bitcoin Core release binaries."
       (propagated-inputs
        `(("binutils" ,xbinutils)
          ("libc" ,pthreads-xlibc)
-         ("gcc" ,pthreads-xgcc)))
+         ("gcc" ,pthreads-xgcc)
+         ("gcc-lib" ,pthreads-xgcc "lib")))
       (synopsis (string-append "Complete GCC tool chain for " target))
       (description (string-append "This package provides a complete GCC tool
 chain for " target " development."))
@@ -219,7 +221,7 @@ chain for " target " development."))
         pkg-config
         ;; Scripting
         perl
-        python-3.7
+        python-3
         ;; Git
         git
         ;; Native gcc 7 toolchain
@@ -231,10 +233,13 @@ chain for " target " development."))
                  (make-mingw-pthreads-cross-toolchain "x86_64-w64-mingw32")
                  (make-nsis-with-sde-support nsis-x86_64)))
           ((string-contains target "riscv64-linux-")
-           (list (make-bitcoin-cross-toolchain "riscv64-linux-gnu"
+           (list (make-bitcoin-cross-toolchain target
+                                               #:base-gcc-for-libc gcc-7)))
+          ((string-contains target "powerpc64le-linux-")
+           (list (make-bitcoin-cross-toolchain target
                                                #:base-gcc-for-libc gcc-7)))
           ((string-contains target "-linux-")
            (list (make-bitcoin-cross-toolchain target)))
           ((string-contains target "darwin")
-           (list clang-8 libcap binutils imagemagick libtiff librsvg font-tuffy cmake-3.15.5 xorriso))
+           (list clang-8 libcap binutils imagemagick libtiff librsvg font-tuffy cmake xorriso))
           (else '())))))

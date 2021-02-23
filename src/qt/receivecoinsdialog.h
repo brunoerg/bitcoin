@@ -51,14 +51,12 @@ public Q_SLOTS:
 
 private:
     Ui::ReceiveCoinsDialog *ui;
-    GUIUtil::TableViewLastColumnResizingFixer *columnResizingFixer;
     WalletModel *model;
     QMenu *contextMenu;
     const PlatformStyle *platformStyle;
 
     QModelIndex selectedRow();
     void copyColumnToClipboard(int column);
-    virtual void resizeEvent(QResizeEvent *event) override;
 
 private Q_SLOTS:
     void on_receiveButton_clicked();
@@ -69,6 +67,7 @@ private Q_SLOTS:
     void updateDisplayUnit();
     void showMenu(const QPoint &point);
     void copyURI();
+    void copyAddress();
     void copyLabel();
     void copyMessage();
     void copyAmount();
