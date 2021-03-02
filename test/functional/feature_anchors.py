@@ -29,23 +29,37 @@ class AnchorsTest(BitcoinTestFramework):
             self.log.info(f"block-relay-only: {i}")
             self.nodes[0].add_outbound_p2p_connection(P2PInterface(), p2p_idx=i, connection_type="block-relay-only")
         
-        self.log.info("Check node connections")
+        self.log.info("Check node 0 connections")
         check_node_connections(node=self.nodes[0], num_in=0, num_out=2)
 
+        # 127.0.0.1
+        ip = '7f000001'
+
+        # Since the ip is always 127.0.0.1 for this case, we store only the port to identify the block-relay-only peers
+        block_relay_nodes_port = []
+        for p in self.nodes[0].getpeerinfo():
+            if p['connection_type'] == 'block-relay-only':
+                addr_split = p['addr'].split(':')
+                block_relay_nodes_port.append(hex(int(addr_split[1]))[2:])
+        
         self.log.info("Stop node 0")
         self.stop_node(0)
 
-        self.log.info("Check anchors.dat file in node directory")
+        self.log.info("Check anchors.dat file in the node directory")
         assert os.path.exists(os.path.join(self.nodes[0].datadir + '/regtest', 'anchors.dat'))
+
+        self.log.info("Check the addresses in anchors.dat")
+        for line in open(os.path.join(self.nodes[0].datadir + '/regtest', 'anchors.dat'), 'rb'):
+            item = line.rstrip().hex()
+            for port in block_relay_nodes_port:
+                ip_port = ip + port
+                assert ip_port in item
 
         self.log.info("Start node 0")
         self.start_node(0)
 
         self.log.info("When node starts, check if anchors.dat doesn't exist anymore")
         assert not os.path.exists(os.path.join(self.nodes[0].datadir + '/regtest', 'anchors.dat'))
-
-        self.log.info(self.nodes[0].getpeerinfo())
-
 
 if __name__ == '__main__':
     AnchorsTest().main()
