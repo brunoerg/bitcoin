@@ -863,7 +863,7 @@ if test x$use_hardening != xno; then
 
   dnl -fcf-protection used with Clang 7 causes ld to emit warnings:
   dnl ld: error: ... <corrupt x86 feature size: 0x8>
-  dnl Use CHECK_LINK_FLAG & --fatal-warnings to ensure we wont use the flag in this case.
+  dnl Use CHECK_LINK_FLAG & --fatal-warnings to ensure we won't use the flag in this case.
   AX_CHECK_LINK_FLAG([-fcf-protection=full],[HARDENED_CXXFLAGS="$HARDENED_CXXFLAGS -fcf-protection=full"],, [[$LDFLAG_WERROR]])
 
   dnl stack-clash-protection does not work properly when building for Windows.
@@ -1269,7 +1269,7 @@ if test "x$enable_fuzz" = "xyes"; then
     [[-fsanitize=$use_sanitizers]],
     [AC_MSG_RESULT([no])],
     [AC_MSG_RESULT([yes])
-     CPPFLAGS="$CPPFLAGS -DPROVIDE_MAIN_FUNCTION"],
+     CPPFLAGS="$CPPFLAGS -DPROVIDE_FUZZ_MAIN_FUNCTION"],
     [],
     [AC_LANG_PROGRAM([[
       #include <cstdint>
@@ -1283,7 +1283,7 @@ else
   BITCOIN_QT_INIT
 
   dnl sets $bitcoin_enable_qt, $bitcoin_enable_qt_test, $bitcoin_enable_qt_dbus
-  BITCOIN_QT_CONFIGURE([5.5.1])
+  BITCOIN_QT_CONFIGURE([5.9.5])
 
   dnl Keep a copy of the original $QT_INCLUDES and use it when invoking qt's moc
   QT_INCLUDES_UNSUPPRESSED=$QT_INCLUDES
@@ -1293,7 +1293,7 @@ else
     QT_TEST_INCLUDES=SUPPRESS_WARNINGS($QT_TEST_INCLUDES)
   fi
 
-  CPPFLAGS="$CPPFLAGS -DPROVIDE_MAIN_FUNCTION"
+  CPPFLAGS="$CPPFLAGS -DPROVIDE_FUZZ_MAIN_FUNCTION"
 fi
 
 if test x$enable_wallet != xno; then
@@ -1902,9 +1902,9 @@ if test "x$enable_wallet" != "xno"; then
     echo "    with sqlite   = $use_sqlite"
     echo "    with bdb      = $use_bdb"
 fi
-echo "    with gui / qt = $bitcoin_enable_qt"
+echo "  with gui / qt   = $bitcoin_enable_qt"
 if test x$bitcoin_enable_qt != xno; then
-    echo "  with qr         = $use_qr"
+    echo "    with qr       = $use_qr"
 fi
 echo "  with zmq        = $use_zmq"
 if test x$enable_fuzz == xno; then

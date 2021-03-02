@@ -103,8 +103,8 @@ find output/ -type f -print0 | sort -z | xargs -r0 sha256sum
 
   Override the space-separated list of platform triples for which to perform a
   bootstrappable build. _(defaults to "x86\_64-linux-gnu arm-linux-gnueabihf
-  aarch64-linux-gnu riscv64-linux-gnu x86_64-w64-mingw32
-  x86_64-apple-darwin18")_
+  aarch64-linux-gnu riscv64-linux-gnu powerpc64-linux-gnu powerpc64le-linux-gnu
+  x86\_64-w64-mingw32 x86\_64-apple-darwin18")_
 
 * _**SOURCES_PATH**_
 
@@ -117,6 +117,13 @@ find output/ -type f -print0 | sort -z | xargs -r0 sha256sum
   Set the depends tree cache for built packages. This is passed through to the
   depends tree. Setting this to the same directory across multiple builds of the
   depends tree can eliminate unnecessary building of packages.
+
+* _**SDK_PATH**_
+
+  Set the path where _extracted_ SDKs can be found. This is passed through to
+  the depends tree. Note that this is should be set to the _parent_ directory of
+  the actual SDK (e.g. SDK_PATH=$HOME/Downloads/macOS-SDKs instead of
+  $HOME/Downloads/macOS-SDKs/Xcode-11.3.1-11C505-extracted-SDK-with-libcxx-headers).
 
 * _**MAX_JOBS**_
 
