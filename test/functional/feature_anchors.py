@@ -29,31 +29,43 @@ class AnchorsTest(BitcoinTestFramework):
             self.log.info(f"block-relay-only: {i}")
             self.nodes[0].add_outbound_p2p_connection(P2PInterface(), p2p_idx=i, connection_type="block-relay-only")
         
+        self.log.info("Add 5 inbound connections to node 0")
+        for i in range(5):
+            self.log.info(f"inbound: {i}")
+            self.nodes[0].add_p2p_connection(P2PInterface())
+
         self.log.info("Check node 0 connections")
-        check_node_connections(node=self.nodes[0], num_in=0, num_out=2)
+        check_node_connections(node=self.nodes[0], num_in=5, num_out=2)
 
         # 127.0.0.1
         ip = '7f000001'
 
-        # Since the ip is always 127.0.0.1 for this case, we store only the port to identify the block-relay-only peers
+        # Since the ip is always 127.0.0.1 for this case, we store only the port to identify the peers
         block_relay_nodes_port = []
+        inbound_nodes_port = []
         for p in self.nodes[0].getpeerinfo():
+            addr_split = p['addr'].split(':')
             if p['connection_type'] == 'block-relay-only':
-                addr_split = p['addr'].split(':')
                 block_relay_nodes_port.append(hex(int(addr_split[1]))[2:])
-        
+            else:
+                inbound_nodes_port.append(hex(int(addr_split[1]))[2:])
+
         self.log.info("Stop node 0")
         self.stop_node(0)
 
         self.log.info("Check anchors.dat file in the node directory")
         assert os.path.exists(os.path.join(self.nodes[0].datadir + '/regtest', 'anchors.dat'))
 
+        # It should contains only the block-relay-only addresses
         self.log.info("Check the addresses in anchors.dat")
         for line in open(os.path.join(self.nodes[0].datadir + '/regtest', 'anchors.dat'), 'rb'):
             item = line.rstrip().hex()
             for port in block_relay_nodes_port:
                 ip_port = ip + port
                 assert ip_port in item
+            for port in inbound_nodes_port:
+                ip_port = ip + port
+                assert ip_port not in item
 
         self.log.info("Start node 0")
         self.start_node(0)
