@@ -81,4 +81,76 @@ BOOST_AUTO_TEST_CASE(IsPeerRegisteredTest)
     BOOST_CHECK(!tracker.IsPeerRegistered(peer_id0));
 }
 
+BOOST_AUTO_TEST_CASE(ShouldFanoutToTest)
+{
+    TxReconciliationTracker tracker(1);
+    NodeId peer_id0 = 0;
+    NodeId peer_id1 = 1;
+    CSipHasher hasher(0x0706050403020100ULL, 0x0F0E0D0C0B0A0908ULL);
+
+    // If peer is not registered for reconciliation, it should be always chosen for flooding.
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id0,
+                                           /*inbounds_all_and_fanouted=*/std::make_pair(10, 0), /*outbounds_fanouted=*/0));
+    }
+
+    tracker.PreRegisterPeer(peer_id0);
+    BOOST_REQUIRE(!tracker.IsPeerRegistered(peer_id0));
+    // Same after pre-registering.
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id0,
+                                           /*inbounds_all_and_fanouted=*/std::make_pair(10, 0), /*outbounds_fanouted=*/0));
+    }
+
+    // Once the peer is registered, it should be selected for flooding of some transactions.
+    BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id0, /*is_peer_inbound=*/true, 1, 1), ReconciliationRegisterResult::SUCCESS);
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id0,
+                                           /*inbounds_all_and_fanouted=*/std::make_pair(10, 0), /*outbounds_fanouted=*/0));
+    }
+
+    // Don't select a fanout target if it was already fanouted sufficiently
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(!tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id0,
+                                            /*inbounds_all_and_fanouted=*/std::make_pair(10, 1), /*outbounds_fanouted=*/0));
+    }
+
+    // The chances of picking our peer is 100% based on the inbounds.
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id0,
+                                           /*inbounds_all_and_fanouted=*/std::make_pair(30, 2), /*outbounds_fanouted=*/0));
+    }
+
+    // The chances of picking our peer is 0% based on the inbounds.
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(!tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id0,
+                                            /*inbounds_all_and_fanouted=*/std::make_pair(30, 4), /*outbounds_fanouted=*/0));
+    }
+
+    tracker.PreRegisterPeer(peer_id1);
+    BOOST_REQUIRE_EQUAL(tracker.RegisterPeer(peer_id1, /*is_peer_inbound=*/false, 1, 1), ReconciliationRegisterResult::SUCCESS);
+
+    // The chances of picking the peer is 100% based on the outbounds.
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id1,
+                                           /*inbounds_all_and_fanouted=*/std::make_pair(0, 0), /*outbounds_fanouted=*/0));
+    }
+
+    // The chances of picking the peer are 0% based on the outbounds.
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(!tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id1,
+                                            /*inbounds_all_and_fanouted=*/std::make_pair(0, 1), /*outbounds_fanouted=*/1));
+        BOOST_CHECK(!tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id1,
+                                            /*inbounds_all_and_fanouted=*/std::make_pair(0, 2), /*outbounds_fanouted=*/1));
+    }
+
+    tracker.ForgetPeer(peer_id1);
+    // A forgotten peer should be always selected for fanout again.
+    for (int i = 0; i < 100; ++i) {
+        BOOST_CHECK(tracker.ShouldFanoutTo(GetRandHash(), hasher, peer_id1,
+                                           /*inbounds_all_and_fanouted=*/std::make_pair(0, 0), /*outbounds_fanouted=*/0));
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

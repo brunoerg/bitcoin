@@ -181,6 +181,8 @@ static constexpr double MAX_ADDR_RATE_PER_SECOND{0.1};
 static constexpr size_t MAX_ADDR_PROCESSING_TOKEN_BUCKET{MAX_ADDR_TO_SEND};
 /** The compactblocks version we support. See BIP 152. */
 static constexpr uint64_t CMPCTBLOCKS_VERSION{2};
+/** Used to determine whether to fanout or to reconcile a transaction with a given peer */
+static const uint64_t RANDOMIZER_ID_FANOUTTARGET = 0xbac89af818407b6aULL; // SHA256("fanouttarget")[0:8]
 
 // Internal stuff
 namespace {
@@ -3761,6 +3763,9 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                 if (!fAlreadyHave && !m_chainman.ActiveChainstate().IsInitialBlockDownload()) {
                     AddTxAnnouncement(pfrom, gtxid, current_time);
                 }
+                if (m_txreconciliation && m_txreconciliation->IsPeerRegistered(pfrom.GetId()) && gtxid.IsWtxid()) {
+                    m_txreconciliation->TryRemovingFromSet(pfrom.GetId(), gtxid.GetHash());
+                }
             } else {
                 LogPrint(BCLog::NET, "Unknown inv type \"%s\" received from peer=%d\n", inv.ToString(), pfrom.GetId());
             }
@@ -4080,6 +4085,10 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                 }
             }
             return;
+        }
+
+        if (m_txreconciliation && m_txreconciliation->IsPeerRegistered(pfrom.GetId())) {
+            m_txreconciliation->TryRemovingFromSet(pfrom.GetId(), wtxid);
         }
 
         const MempoolAcceptResult result = m_chainman.ProcessTransaction(ptx);
@@ -5695,6 +5704,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                 LOCK(tx_relay->m_tx_inventory_mutex);
                 // Check whether periodic sends should happen
                 bool fSendTrickle = pto->HasPermission(NetPermissionFlags::NoBan);
+                const bool reconciles_txs = m_txreconciliation && m_txreconciliation->IsPeerRegistered(pto->GetId());
                 if (tx_relay->m_next_inv_send_time < current_time) {
                     fSendTrickle = true;
                     if (pto->IsInboundConn()) {
@@ -5786,7 +5796,42 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                         if (tx_relay->m_bloom_filter && !tx_relay->m_bloom_filter->IsRelevantAndUpdate(*txinfo.tx)) continue;
                         // Send
                         tx_relay->m_recently_announced_invs.insert(hash);
-                        vInv.push_back(inv);
+
+                        bool fanout = true;
+                        if (reconciles_txs) {
+                            LOCK(m_mempool.cs);
+                            auto txiter = m_mempool.GetIter(txinfo.tx->GetHash());
+                            assert(txiter);
+                            if ((*txiter)->GetCountWithDescendants() > 1) {
+                                // If a transaction has in-mempool children, always fanout it.
+                                // Until package relay is implemented, this is needed to avoid
+                                // breaking parent+child relay expectations in some cases.
+                                //
+                                // Potentially reconciling parent+child would mean that for every
+                                // child we need to to check if any of the parents is currently
+                                // reconciled so that the child isn't fanouted ahead. But then
+                                // it gets tricky when reconciliation sets are full: a) the child
+                                // can't just be added; b) removing parents from reconciliation
+                                // sets for this one child is not good either.
+                                fanout = true;
+                            } else {
+                                size_t inbounds_fanouted = 0, outbounds_fanouted = 0;
+                                m_connman.ForEachNode([&inbounds_fanouted, &outbounds_fanouted, this](CNode* pnode) {
+                                    inbounds_fanouted += pnode->IsInboundConn() && pnode->m_relays_txs;
+                                    outbounds_fanouted += pnode->IsFullOutboundConn() && pnode->m_relays_txs && !m_txreconciliation->IsPeerRegistered(pnode->GetId());
+                                });
+
+                                auto fanout_randomizer = m_connman.GetDeterministicRandomizer(RANDOMIZER_ID_FANOUTTARGET);
+                                fanout = m_txreconciliation->ShouldFanoutTo(wtxid, fanout_randomizer, pto->GetId(),
+                                                                            std::make_pair(m_connman.GetNodeCount(ConnectionDirection::In), inbounds_fanouted),
+                                                                            outbounds_fanouted);
+                            }
+                        }
+
+                        if (fanout || !m_txreconciliation->AddToSet(pto->GetId(), wtxid)) {
+                            vInv.push_back(inv);
+                        }
+
                         nRelayedTransactions++;
                         {
                             // Expire old relay messages
