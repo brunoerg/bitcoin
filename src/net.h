@@ -326,13 +326,13 @@ public:
 class TransportSerializer {
 public:
     // prepare message for transport (header construction, error-correction computation, payload encryption, etc.)
-    virtual void prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) const = 0;
+    virtual std::vector<unsigned char> prepareForTransport(CSerializedNetMsg& msg) const = 0;
     virtual ~TransportSerializer() {}
 };
 
 class V1TransportSerializer : public TransportSerializer {
 public:
-    void prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) const override;
+    std::vector<unsigned char> prepareForTransport(CSerializedNetMsg& msg) const override;
 };
 
 struct CNodeOptions

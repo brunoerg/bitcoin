@@ -796,8 +796,9 @@ CNetMessage V1TransportDeserializer::GetMessage(const std::chrono::microseconds 
     return msg;
 }
 
-void V1TransportSerializer::prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) const
+std::vector<unsigned char> V1TransportSerializer::prepareForTransport(CSerializedNetMsg& msg) const
 {
+    std::vector<unsigned char> header;
     // create dbl-sha256 checksum
     uint256 hash = Hash(msg.data);
 
@@ -808,6 +809,8 @@ void V1TransportSerializer::prepareForTransport(CSerializedNetMsg& msg, std::vec
     // serialize header
     header.reserve(CMessageHeader::HEADER_SIZE);
     CVectorWriter{SER_NETWORK, INIT_PROTO_VERSION, header, 0, hdr};
+
+    return header;
 }
 
 size_t CConnman::SocketSendData(CNode& node) const
@@ -2788,8 +2791,7 @@ void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
     );
 
     // make sure we use the appropriate network transport format
-    std::vector<unsigned char> serializedHeader;
-    pnode->m_serializer->prepareForTransport(msg, serializedHeader);
+    const std::vector<unsigned char> serializedHeader{pnode->m_serializer->prepareForTransport(msg)};
     size_t nTotalSize = nMessageSize + serializedHeader.size();
 
     size_t nBytesSent = 0;
