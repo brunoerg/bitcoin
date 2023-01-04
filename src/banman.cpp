@@ -52,7 +52,7 @@ void BanMan::DumpBanlist()
     banmap_t banmap;
     {
         LOCK(m_cs_banned);
-        SweepBanned();
+        if (!m_banned.empty()) SweepBanned();
         if (!BannedSetIsDirty()) return;
         banmap = m_banned;
         SetBannedSetDirty(false);
