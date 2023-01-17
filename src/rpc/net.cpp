@@ -119,6 +119,7 @@ static RPCHelpMan getpeerinfo()
                     {RPCResult::Type::NUM_TIME, "lastrecv", "The " + UNIX_EPOCH_TIME + " of the last receive"},
                     {RPCResult::Type::NUM_TIME, "last_transaction", "The " + UNIX_EPOCH_TIME + " of the last valid transaction received from this peer"},
                     {RPCResult::Type::NUM_TIME, "last_block", "The " + UNIX_EPOCH_TIME + " of the last block received from this peer"},
+                    {RPCResult::Type::BOOL, "preferred_download", "Whether we consider this a preferred download peer"},
                     {RPCResult::Type::NUM, "bytessent", "The total bytes sent"},
                     {RPCResult::Type::NUM, "bytesrecv", "The total bytes received"},
                     {RPCResult::Type::NUM_TIME, "conntime", "The " + UNIX_EPOCH_TIME + " of the connection"},
@@ -243,6 +244,7 @@ static RPCHelpMan getpeerinfo()
             heights.push_back(height);
         }
         obj.pushKV("inflight", heights);
+        obj.pushKV("preferred_download", statestats.m_preferred_download);
         obj.pushKV("addr_relay_enabled", statestats.m_addr_relay_enabled);
         obj.pushKV("addr_processed", statestats.m_addr_processed);
         obj.pushKV("addr_rate_limited", statestats.m_addr_rate_limited);
