@@ -196,7 +196,12 @@ def main():
         progress_bar = None
 
     for capture in capturepaths:
-        process_file(str(capture), messages, "recv" in capture.stem, progress_bar)
+        if os.path.isdir(capture):
+            for path, subdirs, files in os.walk(capture):
+                for f in files:
+                    process_file(f"{path}/{f}", messages, "recv" in capture.stem, progress_bar)
+        else:
+            process_file(str(capture), messages, "recv" in capture.stem, progress_bar)
 
     messages.sort(key=lambda msg: msg['time'])
 
