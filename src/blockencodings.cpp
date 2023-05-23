@@ -104,10 +104,12 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
         return READ_STATUS_FAILED; // Short ID collision
 
     std::vector<bool> have_txn(txn_available.size());
+    int iter = 0;
     {
     LOCK(pool->cs);
     typename CTxMemPool::indexed_transaction_set::index<descendant_score>::type::iterator it = pool->mapTx.get<descendant_score>().begin();
     for (; it != pool->mapTx.get<descendant_score>().begin(); --it) {
+        iter++;
         uint64_t shortid = cmpctblock.GetShortID(it->GetTx().GetWitnessHash());
         std::unordered_map<uint64_t, uint16_t>::iterator idit = shorttxids.find(shortid);
         if (idit != shorttxids.end()) {
@@ -132,6 +134,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
             break;
     }
     }
+    LogPrint(BCLog::CMPCTBLOCK, "Iterations: %i\n", iter);
 
     for (size_t i = 0; i < extra_txn.size(); i++) {
         uint64_t shortid = cmpctblock.GetShortID(extra_txn[i].first);
