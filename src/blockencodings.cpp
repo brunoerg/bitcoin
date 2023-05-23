@@ -106,13 +106,14 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
     std::vector<bool> have_txn(txn_available.size());
     {
     LOCK(pool->cs);
-    for (size_t i = 0; i < pool->vTxHashes.size(); i++) {
-        uint64_t shortid = cmpctblock.GetShortID(pool->vTxHashes[i].first);
+    typename CTxMemPool::indexed_transaction_set::index<descendant_score>::type::iterator it = pool->mapTx.get<descendant_score>().begin();
+    for (; it != pool->mapTx.get<descendant_score>().begin(); --it) {
+        uint64_t shortid = cmpctblock.GetShortID(it->GetTx().GetWitnessHash());
         std::unordered_map<uint64_t, uint16_t>::iterator idit = shorttxids.find(shortid);
         if (idit != shorttxids.end()) {
             if (!have_txn[idit->second]) {
-                txn_available[idit->second] = pool->vTxHashes[i].second->GetSharedTx();
-                have_txn[idit->second]  = true;
+                txn_available[idit->second] = it->GetSharedTx();
+                have_txn[idit->second] = true;
                 mempool_count++;
             } else {
                 // If we find two mempool txn that match the short id, just request it.
