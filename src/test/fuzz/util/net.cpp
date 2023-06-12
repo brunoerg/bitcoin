@@ -25,9 +25,8 @@
 
 class CNode;
 
-CNetAddr ConsumeNetAddr(FuzzedDataProvider& fuzzed_data_provider) noexcept
+CNetAddr ConsumeClearnetAddr(FuzzedDataProvider& fuzzed_data_provider, const Network& network) noexcept
 {
-    const Network network = fuzzed_data_provider.PickValueInArray({Network::NET_IPV4, Network::NET_IPV6, Network::NET_INTERNAL, Network::NET_ONION});
     CNetAddr net_addr;
     if (network == Network::NET_IPV4) {
         in_addr v4_addr = {};
@@ -39,6 +38,17 @@ CNetAddr ConsumeNetAddr(FuzzedDataProvider& fuzzed_data_provider) noexcept
             memcpy(v6_addr.s6_addr, fuzzed_data_provider.ConsumeBytes<uint8_t>(16).data(), 16);
             net_addr = CNetAddr{v6_addr, fuzzed_data_provider.ConsumeIntegral<uint32_t>()};
         }
+    }
+
+    return net_addr;
+}
+
+CNetAddr ConsumeNetAddr(FuzzedDataProvider& fuzzed_data_provider) noexcept
+{
+    const Network network = fuzzed_data_provider.PickValueInArray({Network::NET_IPV4, Network::NET_IPV6, Network::NET_INTERNAL, Network::NET_ONION});
+    CNetAddr net_addr;
+    if (network == Network::NET_IPV4 || network == Network::NET_IPV6) {
+        net_addr = ConsumeClearnetAddr(fuzzed_data_provider, network);
     } else if (network == Network::NET_INTERNAL) {
         net_addr.SetInternal(fuzzed_data_provider.ConsumeBytesAsString(32));
     } else if (network == Network::NET_ONION) {
