@@ -5,6 +5,8 @@
 #include <netaddress.h>
 #include <netgroup.h>
 #include <test/fuzz/fuzz.h>
+#include <test/fuzz/FuzzedDataProvider.h>
+#include <test/fuzz/util/net.h>
 #include <util/asmap.h>
 
 #include <cstdint>
@@ -31,6 +33,7 @@ static const std::vector<bool> IPV4_PREFIX_ASMAP = {
 
 FUZZ_TARGET(asmap)
 {
+    FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
     // Encoding: [7 bits: asmap size] [1 bit: ipv6?] [3-130 bytes: asmap] [4 or 16 bytes: addr]
     if (buffer.size() < 1 + 3 + 4) return;
     int asmap_size = 3 + (buffer[0] & 127);
@@ -59,4 +62,11 @@ FUZZ_TARGET(asmap)
     }
     NetGroupManager netgroupman{asmap};
     (void)netgroupman.GetMappedAS(net_addr);
+
+    std::vector<CNetAddr> clearnet_addrs;
+    LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
+        const Network network = fuzzed_data_provider.ConsumeBool() ? Network::NET_IPV4 : Network::NET_IPV6;
+        clearnet_addrs.push_back(ConsumeClearnetAddr(fuzzed_data_provider, network));
+    }
+    (void)netgroupman.ASMapHealthCheck(clearnet_addrs);
 }
