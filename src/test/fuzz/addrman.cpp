@@ -251,9 +251,17 @@ FUZZ_TARGET_INIT(addrman, initialize_addrman)
         }
     }
     AddrManDeterministic& addr_man = *addr_man_ptr;
+    std::vector<CAddress> addresses;
+
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
         CallOneOf(
             fuzzed_data_provider,
+            [&] {
+                addresses.clear();
+                LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
+                    addresses.push_back(ConsumeAddress(fuzzed_data_provider));
+                }
+            },
             [&] {
                 addr_man.ResolveCollisions();
             },
@@ -261,41 +269,31 @@ FUZZ_TARGET_INIT(addrman, initialize_addrman)
                 (void)addr_man.SelectTriedCollision();
             },
             [&] {
-                std::vector<CAddress> addresses;
-                LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
-                    const std::optional<CAddress> opt_address = ConsumeDeserializable<CAddress>(fuzzed_data_provider);
-                    if (!opt_address) {
-                        break;
-                    }
-                    addresses.push_back(*opt_address);
-                }
-                const std::optional<CNetAddr> opt_net_addr = ConsumeDeserializable<CNetAddr>(fuzzed_data_provider);
-                if (opt_net_addr) {
-                    addr_man.Add(addresses, *opt_net_addr, std::chrono::seconds{ConsumeTime(fuzzed_data_provider, 0, 100000000)});
+                const CNetAddr net_addr{ConsumeNetAddr(fuzzed_data_provider)};
+                addr_man.Add(addresses, net_addr, std::chrono::seconds{ConsumeTime(fuzzed_data_provider, 0, 100000000)});
+            },
+            [&] {
+                if (!addresses.empty()) {
+                    const int item = fuzzed_data_provider.ConsumeIntegralInRange<int>(0, addresses.size() - 1);
+                    addr_man.Good(addresses[item], NodeSeconds{std::chrono::seconds{ConsumeTime(fuzzed_data_provider)}});
                 }
             },
             [&] {
-                const std::optional<CService> opt_service = ConsumeDeserializable<CService>(fuzzed_data_provider);
-                if (opt_service) {
-                    addr_man.Good(*opt_service, NodeSeconds{std::chrono::seconds{ConsumeTime(fuzzed_data_provider)}});
+                if (!addresses.empty()) {
+                    const int item{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, addresses.size() - 1)};
+                    addr_man.Attempt(addresses[item], fuzzed_data_provider.ConsumeBool(), NodeSeconds{std::chrono::seconds{ConsumeTime(fuzzed_data_provider)}});
                 }
             },
             [&] {
-                const std::optional<CService> opt_service = ConsumeDeserializable<CService>(fuzzed_data_provider);
-                if (opt_service) {
-                    addr_man.Attempt(*opt_service, fuzzed_data_provider.ConsumeBool(), NodeSeconds{std::chrono::seconds{ConsumeTime(fuzzed_data_provider)}});
+                if (!addresses.empty()) {
+                    const int item{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, addresses.size() - 1)};
+                    addr_man.Connected(addresses[item], NodeSeconds{std::chrono::seconds{ConsumeTime(fuzzed_data_provider)}});
                 }
             },
             [&] {
-                const std::optional<CService> opt_service = ConsumeDeserializable<CService>(fuzzed_data_provider);
-                if (opt_service) {
-                    addr_man.Connected(*opt_service, NodeSeconds{std::chrono::seconds{ConsumeTime(fuzzed_data_provider)}});
-                }
-            },
-            [&] {
-                const std::optional<CService> opt_service = ConsumeDeserializable<CService>(fuzzed_data_provider);
-                if (opt_service) {
-                    addr_man.SetServices(*opt_service, ConsumeWeakEnum(fuzzed_data_provider, ALL_SERVICE_FLAGS));
+                if (!addresses.empty()) {
+                    const int item{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, addresses.size() - 1)};
+                    addr_man.SetServices(addresses[item], ConsumeWeakEnum(fuzzed_data_provider, ALL_SERVICE_FLAGS));
                 }
             });
     }
@@ -305,7 +303,6 @@ FUZZ_TARGET_INIT(addrman, initialize_addrman)
         /*max_pct=*/fuzzed_data_provider.ConsumeIntegralInRange<size_t>(0, 4096),
         /*network=*/std::nullopt);
     (void)const_addr_man.Select(fuzzed_data_provider.ConsumeBool());
-    (void)const_addr_man.Size();
     CDataStream data_stream(SER_NETWORK, PROTOCOL_VERSION);
     data_stream << const_addr_man;
 }
