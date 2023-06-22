@@ -25,6 +25,7 @@
 #include <string>
 
 CNetAddr ConsumeNetAddr(FuzzedDataProvider& fuzzed_data_provider) noexcept;
+CNetAddr ConsumeClearNetAddr(FuzzedDataProvider& fuzzed_data_provider, const Network& network) noexcept;
 
 class FuzzedSock : public Sock
 {
