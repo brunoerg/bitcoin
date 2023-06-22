@@ -72,8 +72,11 @@ FUZZ_TARGET_INIT(banman, initialize_banman)
                                 ConsumeBanTimeOffset(fuzzed_data_provider), fuzzed_data_provider.ConsumeBool());
                 },
                 [&] {
-                    ban_man.Ban(ConsumeSubNet(fuzzed_data_provider),
-                                ConsumeBanTimeOffset(fuzzed_data_provider), fuzzed_data_provider.ConsumeBool());
+                    CSubNet subnet{ConsumeSubNet(fuzzed_data_provider)};
+                    if (LookupSubNet(subnet.ToString(), subnet)) {
+                        ban_man.Ban(subnet,
+                                    ConsumeBanTimeOffset(fuzzed_data_provider), fuzzed_data_provider.ConsumeBool());
+                    }
                 },
                 [&] {
                     ban_man.ClearBanned();
