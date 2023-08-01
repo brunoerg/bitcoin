@@ -6,12 +6,11 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/util/setup_common.h>
-#include <util/translation.h>
 #include <wallet/context.h>
 #include <wallet/receive.h>
 #include <wallet/wallet.h>
-#include <wallet/walletdb.h>
-#include <wallet/walletutil.h>
+#include <wallet/test/util.h>
+#include <validation.h>
 
 #include <cassert>
 #include <cstdint>
@@ -28,56 +27,80 @@ void initialize_setup()
     g_setup = testing_setup.get();
 }
 
-/**
- * Wraps a descriptor wallet for fuzzing. The constructor writes the sqlite db
- * to disk, the destructor deletes it.
- */
-struct FuzzedWallet {
-    ArgsManager args;
-    WalletContext context;
-    std::shared_ptr<CWallet> wallet;
-    FuzzedWallet(const std::string& name)
-    {
-        context.args = &args;
-        context.chain = g_setup->m_node.chain.get();
-
-        DatabaseOptions options;
-        options.require_create = true;
-        options.create_flags = WALLET_FLAG_DESCRIPTORS;
-        const std::optional<bool> load_on_start;
-        gArgs.ForceSetArg("-keypool", "0"); // Avoid timeout in TopUp()
-
-        DatabaseStatus status;
-        bilingual_str error;
-        std::vector<bilingual_str> warnings;
-        wallet = CreateWallet(context, name, load_on_start, options, status, error, warnings);
-        assert(wallet);
-        assert(error.empty());
-        assert(warnings.empty());
-        assert(wallet->IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS));
+class WalletSingleton {
+public:
+    static WalletSingleton& GetInstance() {
+        static WalletSingleton instance;
+        return instance;
     }
-    ~FuzzedWallet()
-    {
-        const auto name{wallet->GetName()};
-        std::vector<bilingual_str> warnings;
-        std::optional<bool> load_on_start;
-        assert(RemoveWallet(context, wallet, load_on_start, warnings));
-        assert(warnings.empty());
-        UnloadWallet(std::move(wallet));
-        fs::remove_all(GetWalletDir() / fs::PathFromString(name));
+
+    void ResetWallets() {
+        wallet_a.reset();
+        wallet_b.reset();
     }
-    CScript GetScriptPubKey(FuzzedDataProvider& fuzzed_data_provider)
-    {
-        auto type{fuzzed_data_provider.PickValueInArray(OUTPUT_TYPES)};
-        util::Result<CTxDestination> op_dest{util::Error{}};
-        if (fuzzed_data_provider.ConsumeBool()) {
-            op_dest = wallet->GetNewDestination(type, "");
-        } else {
-            op_dest = wallet->GetNewChangeDestination(type);
+
+    CWallet& GetA() {
+        if (!wallet_a) {
+            InitializeWallets();
         }
-        return GetScriptForDestination(*Assert(op_dest));
+        return *wallet_a;
     }
+    CWallet& GetB() {
+        if (!wallet_b) {
+            InitializeWallets();
+        }
+        return *wallet_b;
+    }
+
+private:
+    WalletSingleton() {
+        InitializeWallets();
+    }
+
+    ~WalletSingleton() {
+        ResetWallets();
+    }
+
+    WalletSingleton(const WalletSingleton&) = delete;
+    WalletSingleton& operator=(const WalletSingleton&) = delete;
+
+    void InitializeWallets() {
+        gArgs.ForceSetArg("-keypool", "0"); // Avoid timeout in TopUp()
+        const auto& node{g_setup->m_node};
+        wallet_a = std::make_unique<CWallet>(node.chain.get(), "a", CreateMockableWalletDatabase());
+        wallet_b = std::make_unique<CWallet>(node.chain.get(), "b", CreateMockableWalletDatabase());
+        assert(wallet_a);
+        assert(wallet_b);
+        Chainstate* chainstate = &node.chainman->ActiveChainstate();
+        {
+            LOCK(wallet_a->cs_wallet);
+            wallet_a->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+            wallet_a->SetupDescriptorScriptPubKeyMans();
+            wallet_a->SetLastBlockProcessed(chainstate->m_chain.Height(), chainstate->m_chain.Tip()->GetBlockHash());
+        }
+        {
+            LOCK(wallet_b->cs_wallet);
+            wallet_b->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+            wallet_b->SetupDescriptorScriptPubKeyMans();
+            wallet_b->SetLastBlockProcessed(chainstate->m_chain.Height(), chainstate->m_chain.Tip()->GetBlockHash());
+        }
+    }
+
+    std::unique_ptr<CWallet> wallet_a;
+    std::unique_ptr<CWallet> wallet_b;
 };
+
+CScript GetScriptPubKey(FuzzedDataProvider& fuzzed_data_provider, CWallet& wallet)
+{
+    auto type{fuzzed_data_provider.PickValueInArray(OUTPUT_TYPES)};
+    util::Result<CTxDestination> op_dest{util::Error{}};
+    if (fuzzed_data_provider.ConsumeBool()) {
+        op_dest = wallet.GetNewDestination(type, "");
+    } else {
+        op_dest = wallet.GetNewChangeDestination(type);
+    }
+    return GetScriptForDestination(*Assert(op_dest));
+}
 
 FUZZ_TARGET(wallet_notifications, .init = initialize_setup)
 {
@@ -86,8 +109,10 @@ FUZZ_TARGET(wallet_notifications, .init = initialize_setup)
     // without fee. Thus, the balance of the wallets should always equal the
     // total amount.
     const auto total_amount{ConsumeMoney(fuzzed_data_provider)};
-    FuzzedWallet a{"fuzzed_wallet_a"};
-    FuzzedWallet b{"fuzzed_wallet_b"};
+
+    WalletSingleton::GetInstance().ResetWallets();
+    CWallet& wallet_a{WalletSingleton::GetInstance().GetA()};
+    CWallet& wallet_b{WalletSingleton::GetInstance().GetB()};
 
     // Keep track of all coins in this test.
     // Each tuple in the chain represents the coins and the block created with
@@ -126,12 +151,12 @@ FUZZ_TARGET(wallet_notifications, .init = initialize_setup)
                     {
                         const auto out_value{ConsumeMoney(fuzzed_data_provider, in)};
                         in -= out_value;
-                        auto& wallet{fuzzed_data_provider.ConsumeBool() ? a : b};
-                        tx.vout.emplace_back(out_value, wallet.GetScriptPubKey(fuzzed_data_provider));
+                        auto& wallet{fuzzed_data_provider.ConsumeBool() ? wallet_a : wallet_b};
+                        tx.vout.emplace_back(out_value, GetScriptPubKey(fuzzed_data_provider, wallet));
                     }
                     // Spend the remaining input value, if any
-                    auto& wallet{fuzzed_data_provider.ConsumeBool() ? a : b};
-                    tx.vout.emplace_back(in, wallet.GetScriptPubKey(fuzzed_data_provider));
+                    auto& wallet{fuzzed_data_provider.ConsumeBool() ? wallet_a : wallet_b};
+                    tx.vout.emplace_back(in, GetScriptPubKey(fuzzed_data_provider, wallet));
                     // Add tx to block
                     block.vtx.emplace_back(MakeTransactionRef(tx));
                 }
@@ -145,8 +170,8 @@ FUZZ_TARGET(wallet_notifications, .init = initialize_setup)
                 // time to the maximum value. This ensures that the wallet's birth time is always
                 // earlier than this maximum time.
                 info.chain_time_max = std::numeric_limits<unsigned int>::max();
-                a.wallet->blockConnected(info);
-                b.wallet->blockConnected(info);
+                wallet_a.blockConnected(info);
+                wallet_b.blockConnected(info);
                 // Store the coins for the next block
                 Coins coins_new;
                 for (const auto& tx : block.vtx) {
@@ -167,15 +192,15 @@ FUZZ_TARGET(wallet_notifications, .init = initialize_setup)
                 info.prev_hash = &block.hashPrevBlock;
                 info.height = chain.size() - 1;
                 info.data = &block;
-                a.wallet->blockDisconnected(info);
-                b.wallet->blockDisconnected(info);
+                wallet_a.blockDisconnected(info);
+                wallet_b.blockDisconnected(info);
                 chain.pop_back();
             });
         auto& [coins, first_block]{chain.front()};
         if (!first_block.vtx.empty()) {
             // Only check balance when at least one block was submitted
-            const auto bal_a{GetBalance(*a.wallet).m_mine_trusted};
-            const auto bal_b{GetBalance(*b.wallet).m_mine_trusted};
+            const auto bal_a{GetBalance(wallet_a).m_mine_trusted};
+            const auto bal_b{GetBalance(wallet_b).m_mine_trusted};
             assert(total_amount == bal_a + bal_b);
         }
     }
