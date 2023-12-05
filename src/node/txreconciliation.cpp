@@ -9,6 +9,7 @@
 #include <util/check.h>
 #include <util/hasher.h>
 
+#include <cmath>
 #include <unordered_map>
 #include <variant>
 
@@ -18,6 +19,12 @@ namespace {
 /** Static salt component used to compute short txids for sketch construction, see BIP-330. */
 const std::string RECON_STATIC_SALT = "Tx Relay Salting";
 const HashWriter RECON_SALT_HASHER = TaggedHash(RECON_STATIC_SALT);
+/**
+ * Announce transactions via full wtxid to a limited number of inbound and outbound peers.
+ * Justification for these values are provided here:
+ * https://github.com/naumenkogs/txrelaysim/issues/7#issuecomment-902165806 */
+constexpr double INBOUND_FANOUT_DESTINATIONS_FRACTION = 0.1;
+constexpr size_t OUTBOUND_FANOUT_DESTINATIONS = 1;
 /**
  * Maximum number of wtxids stored in a peer local set, bounded to protect the memory use of
  * reconciliation sets and short ids mappings, and CPU used for sketch computation.
@@ -84,6 +91,9 @@ private:
      */
     std::unordered_map<NodeId, std::variant<uint64_t, TxReconciliationState>> m_states GUARDED_BY(m_txreconciliation_mutex);
 
+    // Used for randomly choosing fanout targets.
+    CSipHasher m_deterministic_randomizer;
+
     TxReconciliationState* GetRegisteredPeerState(NodeId peer_id) EXCLUSIVE_LOCKS_REQUIRED(m_txreconciliation_mutex)
     {
         AssertLockHeld(m_txreconciliation_mutex);
@@ -94,7 +104,7 @@ private:
     }
 
 public:
-    explicit Impl(uint32_t recon_version) : m_recon_version(recon_version) {}
+    explicit Impl(uint32_t recon_version, CSipHasher hasher) : m_recon_version(recon_version), m_deterministic_randomizer(std::move(hasher)) {}
 
     uint64_t PreRegisterPeer(NodeId peer_id) EXCLUSIVE_LOCKS_REQUIRED(!m_txreconciliation_mutex)
     {
@@ -218,9 +228,91 @@ public:
         return (recon_state != m_states.end() &&
                 std::holds_alternative<TxReconciliationState>(recon_state->second));
     }
+
+    bool IsFanoutTarget(const Wtxid& wtxid, NodeId peer_id, bool we_initiate, double n) const EXCLUSIVE_LOCKS_REQUIRED(m_txreconciliation_mutex)
+    {
+        // We use the pre-determined randomness to give a consistent result per transaction, thus making sure that no transaction
+        // gets "unlucky" if every per-peer roll fails. This means that, given a `wtxid`, the ordering will always be the same,
+        // independently of what peer this is queried for. So some need to be picked eventually (as long as `n` doesn't shrink).
+        CSipHasher deterministic_randomizer{m_deterministic_randomizer};
+        deterministic_randomizer.Write(wtxid.ToUint256());
+
+        // We decide a peer is a fanout target for a given transaction deterministically at random based on two things: the wtxid of
+        // the transaction to be relayed (which we used as a seed for the randomizer) and the likelihood to fanout this transaction
+        // (which depends on how many non-erlay tx-relay peers we have, and the direction of the connection).
+        // In order to do this, we sort the peers in random order, and then we pick the top `n` peers of the resulting collection.
+        // If the our chosen peer happens to be within the picked selection, we fanout to it, otherwise we don't.
+        const size_t targets_size = ((deterministic_randomizer.Finalize() & 0xFFFFFFFF) + uint64_t(n * 0x100000000)) >> 32;
+
+        std::vector<std::pair<uint64_t, NodeId>> best_peers;
+        best_peers.reserve(m_states.size());
+
+        for (const auto& indexed_state : m_states) {
+            const auto cur_state = std::get_if<TxReconciliationState>(&indexed_state.second);
+            if (cur_state && cur_state->m_we_initiate == we_initiate) {
+                uint64_t hash_key = CSipHasher(deterministic_randomizer).Write(wtxid.ToUint256()).Finalize();
+                best_peers.emplace_back(hash_key, indexed_state.first);
+            }
+        }
+
+        std::sort(best_peers.begin(), best_peers.end());
+
+        auto it = best_peers.begin();
+        for (size_t i = 0; i < targets_size && it != best_peers.end(); ++i, ++it) {
+            if (it->second == peer_id) return true;
+        }
+        return false;
+    }
+
+    /*
+     * TODO. This is currently not marked const, because it would require adding a const version
+     * of GetRegisteredPeerState. However, this function becomes non-const in the next commit anyway
+     * due to caching. Thus, we can save us adding that extra function for now.
+     */
+    bool ShouldFanoutTo(const Wtxid& wtxid, NodeId peer_id,
+                        size_t inbounds_fanout_tx_relay, size_t outbounds_fanout_tx_relay)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_txreconciliation_mutex)
+    {
+        AssertLockNotHeld(m_txreconciliation_mutex);
+        LOCK(m_txreconciliation_mutex);
+        auto peer_state = GetRegisteredPeerState(peer_id);
+        if (!peer_state) return true;
+        // We decide whether a particular peer is a low-fanout flood target differently
+        // based on its connection direction:
+        // - for outbounds we have a fixed number of flood destinations;
+        // - for inbounds we use a fraction of all inbound peers supporting tx relay.
+        //
+        // We first decide how many reconciling peers of a given direction we want to flood to,
+        // and then generate a list of peers of that size for a given transaction. We then see
+        // whether the given peer falls into this list.
+        double n;
+        if (peer_state->m_we_initiate) {
+            n = OUTBOUND_FANOUT_DESTINATIONS - outbounds_fanout_tx_relay;
+        } else {
+            const size_t inbound_rcncl_peers = std::count_if(m_states.begin(), m_states.end(),
+                                                             [](const auto& indexed_state) {
+                                                                 const auto* cur_state = std::get_if<TxReconciliationState>(&indexed_state.second);
+                                                                 if (cur_state) return !cur_state->m_we_initiate;
+                                                                 return false;
+                                                             });
+
+            // Since we use the fraction for inbound peers, we first need to compute the total
+            // number of inbound targets.
+            const double inbound_targets = (inbounds_fanout_tx_relay + inbound_rcncl_peers) * INBOUND_FANOUT_DESTINATIONS_FRACTION;
+            n = inbound_targets - inbounds_fanout_tx_relay;
+        }
+
+        // Pure optimization to avoid going through the peers when the odds of picking one are
+        // too low.
+        if (n < 0.001) {
+            return false;
+        }
+
+        return IsFanoutTarget(wtxid, peer_id, peer_state->m_we_initiate, n);
+    }
 };
 
-TxReconciliationTracker::TxReconciliationTracker(uint32_t recon_version) : m_impl{std::make_unique<TxReconciliationTracker::Impl>(recon_version)} {}
+TxReconciliationTracker::TxReconciliationTracker(uint32_t recon_version, CSipHasher hasher) : m_impl{std::make_unique<TxReconciliationTracker::Impl>(recon_version, hasher)} {}
 
 TxReconciliationTracker::~TxReconciliationTracker() = default;
 
@@ -253,4 +345,11 @@ void TxReconciliationTracker::ForgetPeer(NodeId peer_id)
 bool TxReconciliationTracker::IsPeerRegistered(NodeId peer_id) const
 {
     return m_impl->IsPeerRegistered(peer_id);
+}
+
+bool TxReconciliationTracker::ShouldFanoutTo(const Wtxid& wtxid, NodeId peer_id,
+                                             size_t inbounds_fanout_tx_relay, size_t outbounds_fanout_tx_relay)
+{
+    return m_impl->ShouldFanoutTo(wtxid, peer_id,
+                                  inbounds_fanout_tx_relay, outbounds_fanout_tx_relay);
 }
