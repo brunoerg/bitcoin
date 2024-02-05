@@ -32,10 +32,11 @@ FUZZ_TARGET(connman, .init = initialize_connman)
 {
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     SetMockTime(ConsumeTime(fuzzed_data_provider));
+    auto netgroupman{ConsumeNetGroupManager(fuzzed_data_provider)};
     ConnmanTestMsg connman{fuzzed_data_provider.ConsumeIntegral<uint64_t>(),
                      fuzzed_data_provider.ConsumeIntegral<uint64_t>(),
                      *g_setup->m_node.addrman,
-                     *g_setup->m_node.netgroupman,
+                     netgroupman,
                      Params(),
                      fuzzed_data_provider.ConsumeBool()};
 
@@ -142,6 +143,7 @@ FUZZ_TARGET(connman, .init = initialize_connman)
     (void)connman.GetTotalBytesSent();
     (void)connman.GetTryNewOutboundPeer();
     (void)connman.GetUseAddrmanOutgoing();
+    (void)connman.ASMapHealthCheck();
 
     connman.ClearTestNodes();
 }
