@@ -56,7 +56,7 @@ FUZZ_TARGET(crypter, .init = initialize_crypter)
                 plain_text_ed = CKeyingMaterial(random_vector.begin(), random_vector.end());
             },
             [&] {
-                cipher_text_ed = ConsumeRandomLengthByteVector(fuzzed_data_provider);
+                cipher_text_ed = ConsumeRandomLengthByteVector(fuzzed_data_provider, 64);
             },
             [&] {
                 (void)crypt.Encrypt(plain_text_ed, cipher_text_ed);
