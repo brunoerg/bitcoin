@@ -49,11 +49,13 @@ struct CNodeStateStats {
     ServiceFlags their_services;
     int64_t presync_height{-1};
     std::chrono::seconds time_offset{0};
+    bool m_tx_reconciliation{false};
 };
 
 struct PeerManagerInfo {
     std::chrono::seconds median_outbound_time_offset{0s};
     bool ignores_incoming_txs{false};
+    bool reconcile_txs{DEFAULT_TXRECONCILIATION_ENABLE};
 };
 
 class PeerManager : public CValidationInterface, public NetEventsInterface

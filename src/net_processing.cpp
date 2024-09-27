@@ -1902,6 +1902,9 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
         stats.m_fee_filter_received = 0;
     }
 
+    if (m_txreconciliation) {
+        stats.m_tx_reconciliation = m_txreconciliation->IsPeerRegistered(nodeid);
+    }
     stats.m_ping_wait = ping_wait;
     stats.m_addr_processed = peer->m_addr_processed.load();
     stats.m_addr_rate_limited = peer->m_addr_rate_limited.load();
@@ -1922,6 +1925,7 @@ PeerManagerInfo PeerManagerImpl::GetInfo() const
     return PeerManagerInfo{
         .median_outbound_time_offset = m_outbound_time_offsets.Median(),
         .ignores_incoming_txs = m_opts.ignore_incoming_txs,
+        .reconcile_txs = m_opts.reconcile_txs
     };
 }
 
