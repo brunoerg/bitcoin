@@ -85,15 +85,11 @@ uint256 BlockWitnessMerkleRoot(const CBlock& block, bool* mutated)
 }
 
 /* This implements a constant-space merkle root/path calculator, limited to 2^32 leaves. */
-static void MerkleComputation(const std::vector<uint256>& leaves, uint256* proot, bool* pmutated, uint32_t leaf_pos, std::vector<uint256>* path)
+static void MerkleComputation(const std::vector<uint256>& leaves, uint32_t leaf_pos, std::vector<uint256>* path)
 {
     if (path) path->clear();
     Assume(leaves.size() <= UINT32_MAX);
-    if (leaves.size() == 0) {
-        if (pmutated) *pmutated = false;
-        if (proot) *proot = uint256();
-        return;
-    }
+    if (leaves.empty()) return;
     bool mutated = false;
     // count is the number of leaves processed so far.
     uint32_t count = 0;
@@ -169,14 +165,11 @@ static void MerkleComputation(const std::vector<uint256>& leaves, uint256* proot
             level++;
         }
     }
-    // Return result.
-    if (pmutated) *pmutated = mutated;
-    if (proot) *proot = h;
 }
 
 static std::vector<uint256> ComputeMerklePath(const std::vector<uint256>& leaves, uint32_t position) {
     std::vector<uint256> ret;
-    MerkleComputation(leaves, nullptr, nullptr, position, &ret);
+    MerkleComputation(leaves, position, &ret);
     return ret;
 }
 
