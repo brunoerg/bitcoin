@@ -631,6 +631,13 @@ class PSBTTest(BitcoinTestFramework):
             combined = self.nodes[2].combinepsbt(combiner['combine'])
             assert_equal(combined, combiner['result'])
 
+        # Check unknown fields
+        decoded_psbt = self.nodes[2].decodepsbt(combiners[1]['result'])
+        unknown_field = {'0f010203040506070809': '0102030405060708090a0b0c0d0e0f', '0f010203040506070810': '0102030405060708090a0b0c0d0e0f'}
+        assert_equal(decoded_psbt['inputs'][0]['unknown'], unknown_field)
+        assert_equal(decoded_psbt['outputs'][0]['unknown'], unknown_field)
+        assert_equal(decoded_psbt['unknown'], unknown_field)
+
         # Empty combiner test
         assert_raises_rpc_error(-8, "Parameter 'txs' cannot be empty", self.nodes[0].combinepsbt, [])
 
