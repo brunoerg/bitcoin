@@ -784,6 +784,7 @@ static RPCHelpMan importmempool()
             }
 
             UniValue ret{UniValue::VOBJ};
+            assert(false);
             return ret;
         },
     };
