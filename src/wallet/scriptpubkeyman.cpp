@@ -421,10 +421,10 @@ bool LegacyDataSPKM::GetKeyOrigin(const CKeyID& keyID, KeyOriginInfo& info) cons
         meta = it->second;
     }
     if (meta.has_key_origin) {
-        std::copy(meta.key_origin.fingerprint, meta.key_origin.fingerprint + 4, info.fingerprint);
+        info.fingerprint = meta.key_origin.fingerprint;
         info.path = meta.key_origin.path;
     } else { // Single pubkeys get the master fingerprint of themselves
-        std::copy(keyID.begin(), keyID.begin() + 4, info.fingerprint);
+        info.fingerprint = keyID.fingerprint();
     }
     return true;
 }
@@ -1425,9 +1425,9 @@ std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTran
             }
         }
 
-        PSBTError res = SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!options.sign, /*hide_origin=*/!options.bip32_derivs), psbtx, i, &txdata, options, /*out_sigdata=*/nullptr);
-        if (res != PSBTError::OK && res != PSBTError::INCOMPLETE) {
-            return res;
+        const auto sign_result = SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!options.sign, /*hide_origin=*/!options.bip32_derivs), psbtx, i, &txdata, options, /*out_sigdata=*/nullptr);
+        if (!sign_result.has_value() && sign_result.error() != PSBTError::INCOMPLETE) {
+            return sign_result.error();
         }
 
         bool signed_one = PSBTInputSigned(input);

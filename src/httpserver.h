@@ -6,7 +6,6 @@
 #define BITCOIN_HTTPSERVER_H
 
 #include <atomic>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -32,15 +31,20 @@ class SignalInterrupt;
 /**
  * The default value for `-rpcthreads`. This number of threads will be created at startup.
  */
-static const int DEFAULT_HTTP_THREADS=16;
+inline constexpr int DEFAULT_HTTP_THREADS=16;
 
 /**
  * The default value for `-rpcworkqueue`. This is the maximum depth of the work queue,
  * we don't allocate this number of work queue items upfront.
  */
-static const int DEFAULT_HTTP_WORKQUEUE=64;
+inline constexpr int DEFAULT_HTTP_WORKQUEUE=64;
 
-static const int DEFAULT_HTTP_SERVER_TIMEOUT=30;
+inline constexpr int DEFAULT_HTTP_SERVER_TIMEOUT=30;
+
+/**
+ * Maximum number of connected HTTP clients
+ */
+inline constexpr int DEFAULT_MAX_HTTP_CONNECTIONS = 16;
 
 enum class HTTPRequestMethod {
     UNKNOWN,
@@ -68,16 +72,16 @@ namespace http_bitcoin {
 using util::LineReader;
 
 //! Shortest valid request line, used by libevent in evhttp_parse_request_line()
-constexpr size_t MIN_REQUEST_LINE_LENGTH = std::string_view("GET / HTTP/1.0").size();
+inline constexpr size_t MIN_REQUEST_LINE_LENGTH = std::string_view("GET / HTTP/1.0").size();
 
 //! Maximum size of each headers line in an HTTP request,
 //! also the maximum size of all headers total.
 //! See https://github.com/bitcoin/bitcoin/pull/6859
 //! And libevent http.c evhttp_parse_headers_()
-constexpr size_t MAX_HEADERS_SIZE{8192};
+inline constexpr size_t MAX_HEADERS_SIZE{8192};
 
 //! Maximum size of an HTTP request body
-constexpr uint64_t MAX_BODY_SIZE{32_MiB};
+inline constexpr uint64_t MAX_BODY_SIZE{32_MiB};
 
 //! Thrown when a request body exceeds MAX_BODY_SIZE (or *will* exceed, in chunked transfer)
 //! so the server can reply with more specific code 413 (content too large) vs general 400 (bad request)
@@ -105,13 +109,15 @@ public:
      */
     void RemoveAll(std::string_view key);
     /**
+     * @param[in] reader A LineReader instance initialized with the client's receive buffer.
+     * @param[in] write  Whether or not to write the parsed data to the object after validation.
      * @returns false if LineReader hits the end of the buffer before reading an
      *                \n, meaning that we are still waiting on more data from the client.
      *          true  after reading an entire HTTP headers section, terminated
      *                by an empty line and \n.
      * @throws on exceeded read limit and on bad headers syntax (e.g. no ":" in a line)
      */
-    bool Read(util::LineReader& reader);
+    bool Read(util::LineReader& reader, bool write = true);
     std::string Stringify() const;
 
 private:
@@ -120,6 +126,9 @@ private:
      * https://httpwg.org/specs/rfc9110.html#rfc.section.5.2
      */
     std::vector<std::pair<std::string, std::string>> m_headers;
+
+    //! Track total bytes consumed in Read() for limit checks
+    size_t m_consumed{0};
 };
 
 struct HTTPVersion {
@@ -157,12 +166,12 @@ public:
     std::string m_body;
 
     //! Pointer to the client that made the request so we know who to respond to.
-    std::shared_ptr<HTTPRemoteClient> m_client;
+    std::weak_ptr<HTTPRemoteClient> m_client;
 
     //! Response headers may be set in advance before response body is known
     HTTPHeaders m_response_headers;
 
-    explicit HTTPRequest(std::shared_ptr<HTTPRemoteClient> client) : m_client{std::move(client)} {}
+    explicit HTTPRequest(const std::shared_ptr<HTTPRemoteClient>& client) : m_client{client} {}
     //! Construct with a null client for unit tests
     explicit HTTPRequest() : m_client{} {}
 
@@ -195,6 +204,27 @@ public:
     std::pair<bool, std::string> GetHeader(std::string_view hdr) const;
     std::string ReadBody() const { return m_body; }
     void WriteHeader(std::string&& hdr, std::string&& value);
+
+    enum class State {
+        Init,
+        NeedsHeaders,
+        NeedsBody,
+        Complete,
+        Error
+    };
+    State GetState() const { return m_state; }
+    void SetState(State state) { m_state = state; }
+
+    // If a large request is sent with "Transfer-encoding: chunked" we may
+    // read the chunk size in a separate I/O loop iteration than the chunk
+    // of data itself. Store the chunk size value here until the chunk is read.
+    std::optional<uint64_t> m_chunk_size;
+    // We may also read a large chunk over multiple loop iterations.
+    // Track the progress of the chunk here.
+    uint64_t m_chunk_read{0};
+
+private:
+    State m_state = State::Init;
 };
 
 class HTTPServer
@@ -214,6 +244,11 @@ public:
         Assume(m_connected.empty()); // Missing call to DisconnectClients(), or disconnect flags not set
         Assume(m_listen.empty()); // Missing call to StopListening()
     }
+
+    /**
+     * Parse the user's -rpcallowip settings and populate m_allow_subnets
+     */
+    bool InitHTTPAllowList();
 
     /**
      * Bind to a new address:port, start listening and add the listen socket to `m_listen`.
@@ -282,6 +317,11 @@ public:
     void SetServerTimeout(std::chrono::seconds seconds) { m_rpcservertimeout = seconds; }
 
     /**
+     * Set the maximum amount of connected HTTPClients (-rpcmaxconnections)
+     */
+    void SetMaxConnections(int max_conn) { m_rpcmaxconnections = max_conn; }
+
+    /**
      * Force-remove all remaining clients from m_connected without waiting for
      * graceful disconnection. Must only be called after JoinSocketsThreads().
      */
@@ -301,7 +341,7 @@ private:
     /**
      * List of HTTPRemoteClients with connected sockets.
      * Connections will only be added and removed in the I/O thread, but
-     * shared pointers may be passed to worker threads to handle requests
+     * weak pointers may be passed to worker threads to handle requests
      * and send replies.
      */
     std::vector<std::shared_ptr<HTTPRemoteClient>> m_connected;
@@ -377,6 +417,21 @@ private:
     std::chrono::seconds m_rpcservertimeout{DEFAULT_HTTP_SERVER_TIMEOUT};
 
     /**
+     * List of subnets to allow HTTP connections from
+     */
+    std::vector<CSubNet> m_allow_subnets;
+
+    /**
+     * Check an incoming connection's source IP against the allow list
+     */
+    bool ClientAllowed(const CNetAddr& netaddr) const;
+
+    /**
+     * Maximum amount of concurrent connections
+     */
+    int m_rpcmaxconnections{DEFAULT_MAX_HTTP_CONNECTIONS};
+
+    /**
      * Accept a connection.
      * @param[in] listen_sock Socket on which to accept the connection.
      * @param[out] addr Address of the peer that was accepted.
@@ -437,7 +492,7 @@ private:
      * Close underlying socket connections for flagged clients
      * by removing their shared pointer from m_connected. If an HTTPRemoteClient
      * is busy in a worker thread, its connection will be closed once that
-     * job is done and the HTTPRequest is out of scope.
+     * job is done.
      */
     void DisconnectClients();
 };
@@ -461,13 +516,12 @@ public:
      * we copy data from the socket buffer to the client object
      * and attempt to read HTTP requests from here.
      */
-    std::vector<std::byte> m_recv_buffer{};
+    std::string m_recv_buffer{};
 
     //! Requests from a client must be processed in the order in which
-    //! they were received, blocking on a per-client basis. We won't
-    //! process the next request in the queue if we are currently busy
-    //! handling a previous request.
-    std::deque<std::unique_ptr<HTTPRequest>> m_req_queue;
+    //! they were received, blocking on a per-client basis. We read
+    //! one request at a time from the socket buffer then pass it to a worker.
+    std::unique_ptr<HTTPRequest> m_req;
 
     //! Set to true by the I/O thread when a request is popped off
     //! and passed to a worker thread, reset to false by the worker thread.
@@ -542,10 +596,11 @@ public:
 
     /**
      * Try to read an HTTP request from the receive buffer.
+     * Updates HTTPRequest.m_state and drains buffer on error.
      * @param[in]   req     A HTTPRequest to read into
-     * @returns true upon reading a complete request, otherwise false (may throw).
+     * @throws std::runtime_error if request is unreadable or violates protocol
      */
-    bool ReadRequest(HTTPRequest& req);
+    void ReadRequest(HTTPRequest& req);
 
     /**
      * Push data (if there is any) from client's m_send_buffer to the connected socket.

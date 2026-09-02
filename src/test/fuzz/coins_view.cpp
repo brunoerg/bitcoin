@@ -16,6 +16,7 @@
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
+#include <test/util/coins.h>
 #include <test/util/setup_common.h>
 #include <txdb.h>
 #include <util/hasher.h>
@@ -35,14 +36,6 @@
 #include <vector>
 
 namespace {
-const Coin EMPTY_COIN{};
-
-bool operator==(const Coin& a, const Coin& b)
-{
-    if (a.IsSpent() && b.IsSpent()) return true;
-    return a.fCoinBase == b.fCoinBase && a.nHeight == b.nHeight && a.out == b.out;
-}
-
 /**
  * MutationGuardCoinsViewCache asserts that nothing mutates cacheCoins until
  * BatchWrite is called. It keeps a snapshot of the cacheCoins state, which it
@@ -91,11 +84,9 @@ public:
 // Reuse a single global thread pool across fuzz iterations. Creating and destroying a pool every
 // iteration leaks memory, since iterations can run faster than the OS can tear down the threads.
 std::shared_ptr<ThreadPool> g_thread_pool{std::make_shared<ThreadPool>("view_fuzz")};
-Mutex g_thread_pool_mutex;
 
-void StartPoolIfNeeded() EXCLUSIVE_LOCKS_REQUIRED(!g_thread_pool_mutex)
+void StartPoolIfNeeded()
 {
-    LOCK(g_thread_pool_mutex);
     if (!g_thread_pool->WorkersCount()) g_thread_pool->Start(DEFAULT_PREVOUTFETCH_THREADS);
 }
 
@@ -152,8 +143,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
     COutPoint random_out_point;
     Coin random_coin;
     CMutableTransaction random_mutable_transaction;
-    LIMITED_WHILE(good_data && fuzzed_data_provider.ConsumeBool(), 10'000)
-    {
+    LIMITED_WHILE (good_data && fuzzed_data_provider.ConsumeBool(), 10'000) {
         CallOneOf(
             fuzzed_data_provider,
             [&] {
@@ -167,7 +157,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                     const bool possible_overwrite{coins_view_cache.PeekCoin(outpoint) || fuzzed_data_provider.ConsumeBool()};
                     coins_view_cache.AddCoin(outpoint, std::move(coin), possible_overwrite);
                 } else {
-                    coins_view_cache.EmplaceCoinInternalDANGER(std::move(outpoint), std::move(coin));
+                    coins_view_cache.EmplaceCoinInternalDANGER(outpoint, std::move(coin));
                 }
             },
             [&] {
@@ -248,9 +238,8 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                 sentinel.second.SelfRef(sentinel);
                 size_t dirty_count{0};
                 CCoinsMapMemoryResource resource;
-                CCoinsMap coins_map{0, SaltedOutpointHasher{/*deterministic=*/true}, CCoinsMap::key_equal{}, &resource};
-                LIMITED_WHILE(good_data && fuzzed_data_provider.ConsumeBool(), 10'000)
-                {
+                CCoinsMap coins_map{0, SaltedCoinsCacheHasher{/*deterministic=*/true}, CCoinsMap::key_equal{}, &resource};
+                LIMITED_WHILE (good_data && fuzzed_data_provider.ConsumeBool(), 10'000) {
                     CCoinsCacheEntry coins_cache_entry;
                     if (fuzzed_data_provider.ConsumeBool()) {
                         coins_cache_entry.coin = random_coin;
@@ -280,13 +269,6 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
     }
 
     {
-        bool expected_code_path = false;
-        try {
-            (void)coins_view_cache.Cursor();
-        } catch (const std::logic_error&) {
-            expected_code_path = true;
-        }
-        assert(expected_code_path);
         (void)coins_view_cache.DynamicMemoryUsage();
         (void)coins_view_cache.EstimateSize();
         (void)coins_view_cache.GetBestBlock();
@@ -297,7 +279,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
 
     {
         if (is_db && backend_coins_view == original_backend) {
-            assert(backend_coins_view->Cursor());
+            assert(db->Cursor());
         }
         (void)backend_coins_view->EstimateSize();
         (void)backend_coins_view->GetBestBlock();
@@ -381,7 +363,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
 
     {
         const Coin& coin_using_access_coin = coins_view_cache.AccessCoin(random_out_point);
-        const bool exists_using_access_coin = !(coin_using_access_coin == EMPTY_COIN);
+        const bool exists_using_access_coin = !coin_using_access_coin.IsSpent();
         const bool exists_using_have_coin = coins_view_cache.HaveCoin(random_out_point);
         const bool exists_using_have_coin_in_cache = coins_view_cache.HaveCoinInCache(random_out_point);
         if (auto coin{coins_view_cache.GetCoin(random_out_point)}) {
@@ -438,9 +420,9 @@ FUZZ_TARGET(coins_view_db, .init = initialize_coins_view)
 // This allows us to exercise all methods on a CoinsViewOverlay, while also
 // ensuring that nothing can mutate the underlying cache until Flush or Sync is
 // called.
-FUZZ_TARGET(coins_view_overlay, .init = initialize_coins_view) EXCLUSIVE_LOCKS_REQUIRED(!g_thread_pool_mutex)
+FUZZ_TARGET(coins_view_overlay, .init = initialize_coins_view)
 {
-    SeedRandomStateForTest(SeedRand::ZEROS); // for SaltedTxidHasher
+    SeedRandomStateForTest(SeedRand::ZEROS); // for SaltedCoinsCacheHasher
     StartPoolIfNeeded();
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     MutationGuardCoinsViewCache backend_cache{&CoinsViewEmpty::Get(), /*deterministic=*/true};
@@ -450,9 +432,9 @@ FUZZ_TARGET(coins_view_overlay, .init = initialize_coins_view) EXCLUSIVE_LOCKS_R
     TestCoinsView(fuzzed_data_provider, coins_view_cache, &backend_cache);
 }
 
-FUZZ_TARGET(coins_view_stacked, .init = initialize_coins_view) EXCLUSIVE_LOCKS_REQUIRED(!g_thread_pool_mutex)
+FUZZ_TARGET(coins_view_stacked, .init = initialize_coins_view)
 {
-    SeedRandomStateForTest(SeedRand::ZEROS); // for SaltedTxidHasher
+    SeedRandomStateForTest(SeedRand::ZEROS); // for SaltedCoinsCacheHasher
     StartPoolIfNeeded();
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     auto db_params = DBParams{

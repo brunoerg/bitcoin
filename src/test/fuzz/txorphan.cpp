@@ -56,8 +56,7 @@ FUZZ_TARGET(txorphan, .init = initialize_orphanage)
 
     std::vector<CTransactionRef> tx_history;
 
-    LIMITED_WHILE(outpoints.size() < 200'000 && fuzzed_data_provider.ConsumeBool(), 1000)
-    {
+    LIMITED_WHILE (outpoints.size() < 200'000 && fuzzed_data_provider.ConsumeBool(), 1000) {
         // construct transaction
         const CTransactionRef tx = [&] {
             CMutableTransaction tx_mut;
@@ -104,8 +103,7 @@ FUZZ_TARGET(txorphan, .init = initialize_orphanage)
         }
 
         // trigger orphanage functions
-        LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 1000)
-        {
+        LIMITED_WHILE (fuzzed_data_provider.ConsumeBool(), 1000) {
             NodeId peer_id = fuzzed_data_provider.ConsumeIntegral<NodeId>();
             const auto total_bytes_start{orphanage->TotalOrphanUsage()};
             const auto total_peer_bytes_start{orphanage->UsageByPeer(peer_id)};
@@ -175,11 +173,13 @@ FUZZ_TARGET(txorphan, .init = initialize_orphanage)
                     {
                         auto bytes_from_peer_before{orphanage->UsageByPeer(peer_id)};
                         Assert(have_tx == orphanage->EraseTx(tx->GetWitnessHash()));
-                        // After EraseTx, the orphanage may trim itself, so all peers' usage may have gone up or down.
-                        if (have_tx) {
-                            if (!have_tx_and_peer) {
-                                Assert(orphanage->UsageByPeer(peer_id) == bytes_from_peer_before);
-                            }
+                        // After EraseTx, the orphanage may trim itself, so any peer's usage may decrease.
+                        if (!have_tx) {
+                            Assert(orphanage->UsageByPeer(peer_id) == bytes_from_peer_before);
+                        } else if (have_tx_and_peer) {
+                            Assert(orphanage->UsageByPeer(peer_id) <= bytes_from_peer_before - tx_weight);
+                        } else {
+                            Assert(orphanage->UsageByPeer(peer_id) <= bytes_from_peer_before);
                         }
                     }
                     have_tx = orphanage->HaveTx(tx->GetWitnessHash());
@@ -267,8 +267,7 @@ FUZZ_TARGET(txorphan_protected, .init = initialize_orphanage)
     // These are honest peer's live announcements. We expect them to be protected from eviction.
     std::set<Wtxid> protected_wtxids;
 
-    LIMITED_WHILE(outpoints.size() < 400 && fuzzed_data_provider.ConsumeBool(), 1000)
-    {
+    LIMITED_WHILE (outpoints.size() < 400 && fuzzed_data_provider.ConsumeBool(), 1000) {
         // construct transaction
         const CTransactionRef tx = [&] {
             CMutableTransaction tx_mut;
@@ -303,8 +302,7 @@ FUZZ_TARGET(txorphan_protected, .init = initialize_orphanage)
         const auto wtxid{tx->GetWitnessHash()};
 
         // orphanage functions
-        LIMITED_WHILE(fuzzed_data_provider.remaining_bytes(), 10 * global_latency_score_limit)
-        {
+        LIMITED_WHILE (fuzzed_data_provider.remaining_bytes(), 10 * global_latency_score_limit) {
             NodeId peer_id = fuzzed_data_provider.ConsumeIntegralInRange<NodeId>(0, num_peers - 1);
             const auto tx_weight{GetTransactionWeight(*tx)};
 
@@ -566,7 +564,7 @@ FUZZ_TARGET(txorphanage_sim)
     // 5. Run through a scenario of mutators on both real and simulated orphanage.
     //
 
-    LIMITED_WHILE(provider.remaining_bytes() > 0, 200) {
+    LIMITED_WHILE (provider.remaining_bytes() > 0, 200) {
         int command = provider.ConsumeIntegralInRange<uint8_t>(0, 15);
         while (true) {
             if (sim_announcements.size() < MAX_ANN && command-- == 0) {
@@ -598,7 +596,7 @@ FUZZ_TARGET(txorphanage_sim)
                 assert(erased == sim_have);
                 std::erase_if(sim_announcements, [&](auto& ann) { return ann.tx == tx; });
                 break;
-           } else if (command-- == 0) {
+            } else if (command-- == 0) {
                 // EraseForPeer
                 auto peer = read_peer_fn();
                 real->EraseForPeer(peer);
