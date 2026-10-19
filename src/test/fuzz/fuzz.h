@@ -5,6 +5,7 @@
 #ifndef BITCOIN_TEST_FUZZ_FUZZ_H
 #define BITCOIN_TEST_FUZZ_FUZZ_H
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -25,10 +26,17 @@
 using FuzzBufferType = std::span<const uint8_t>;
 
 using TypeTestOneInput = std::function<void(FuzzBufferType)>;
+/** Same signature and contract as libFuzzer's LLVMFuzzerCustomMutator. */
+using TypeCustomMutator = size_t (*)(uint8_t* data, size_t size, size_t max_size, unsigned int seed);
 struct FuzzTargetOptions {
     std::function<void()> init{[] {}};
     bool hidden{false};
+    /** Only used when the fuzz engine is libFuzzer. Other targets keep libFuzzer's default mutations. */
+    TypeCustomMutator mutator{nullptr};
 };
+
+/** Apply the fuzz engine's default mutations (LLVMFuzzerMutate). Only callable from a custom mutator. */
+size_t FuzzDefaultMutate(uint8_t* data, size_t size, size_t max_size);
 
 void FuzzFrameworkRegisterTarget(std::string_view name, TypeTestOneInput target, FuzzTargetOptions opts);
 
