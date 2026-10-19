@@ -24,6 +24,7 @@
 #include <test/util/setup_common.h>
 #include <test/util/transaction_utils.h>
 #include <univalue.h>
+#include <util/check.h>
 #include <util/fs.h>
 #include <util/strencodings.h>
 #include <util/string.h>
@@ -91,6 +92,7 @@ static ScriptErrorDesc script_errors[]={
     {SCRIPT_ERR_WITNESS_UNEXPECTED, "WITNESS_UNEXPECTED"},
     {SCRIPT_ERR_WITNESS_PUBKEYTYPE, "WITNESS_PUBKEYTYPE"},
     {SCRIPT_ERR_TAPSCRIPT_EMPTY_PUBKEY, "TAPSCRIPT_EMPTY_PUBKEY"},
+    {SCRIPT_ERR_TAPSCRIPT_MINIMALIF, "TAPSCRIPT_MINIMALIF"},
     {SCRIPT_ERR_OP_CODESEPARATOR, "OP_CODESEPARATOR"},
     {SCRIPT_ERR_SIG_FINDANDDELETE, "SIG_FINDANDDELETE"},
     {SCRIPT_ERR_SCRIPTNUM, "SCRIPTNUM"}
@@ -1632,7 +1634,7 @@ BOOST_AUTO_TEST_CASE(script_HasValidOps)
 BOOST_AUTO_TEST_CASE(bip341_keypath_test_vectors)
 {
     UniValue tests;
-    tests.read(json_tests::bip341_wallet_vectors);
+    Assert(tests.read(json_tests::bip341_wallet_vectors));
 
     const auto& vectors = tests["keyPathSpending"];
 

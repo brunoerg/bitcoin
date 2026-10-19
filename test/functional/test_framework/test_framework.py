@@ -16,6 +16,7 @@ import platform
 import pdb
 import random
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -232,6 +233,10 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         check_json_precision()
         export_env_build_path(self.config)
 
+        sanitizer_env = runpy.run_path(Path(self.config["environment"]["BUILDDIR"]) / "test" / "with_sanitizer_env.py", )["sanitizer_env"]
+        for name, value in sanitizer_env().items():
+            os.environ.setdefault(name, value)
+
         self.options.cachedir = os.path.abspath(self.options.cachedir)
 
         # Set up temp directory and start logging
@@ -400,6 +405,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.init_wallet(node=i)
 
     def init_wallet(self, *, node):
+        """Refer to the self.wallet_names docstring on how to use this"""
         wallet_name = self.default_wallet_name if self.wallet_names is None else self.wallet_names[node] if node < len(self.wallet_names) else False
         if wallet_name is not False:
             n = self.nodes[node]
@@ -694,7 +700,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             utxos.append({"txid": send_res["txid"], "vout": vout})
         return utxos
 
-    def sync_blocks(self, nodes=None, wait=1, timeout=60):
+    def sync_blocks(self, nodes=None, *, wait=0.05, timeout=60):
         """
         Wait until everybody has the same tip.
         sync_blocks needs to be called with an rpc_connections set that has least
@@ -716,7 +722,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             "".join("\n  {!r}".format(b) for b in best_hash),
         ))
 
-    def sync_mempools(self, nodes=None, wait=1, timeout=60, flush_scheduler=True):
+    def sync_mempools(self, nodes=None, *, wait=0.05, timeout=60, flush_scheduler=True):
         """
         Wait until everybody has the same transactions in their memory
         pools
@@ -743,7 +749,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.sync_blocks(nodes)
         self.sync_mempools(nodes)
 
-    def wait_until(self, test_function, timeout=60, check_interval=0.05):
+    def wait_until(self, test_function, *, timeout=60, check_interval=0.05):
         return wait_until_helper_internal(test_function, timeout=timeout, timeout_factor=self.options.timeout_factor, check_interval=check_interval)
 
     def fill_node_addrman(self, *, node_index, address_types_to_add):
@@ -961,13 +967,13 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.stop_nodes()
             self.nodes = []
 
-            def cache_path(*paths):
-                return os.path.join(cache_node_dir, self.chain, *paths)
+            cache_path = cache_node.chain_path
 
-            os.rmdir(cache_path('wallets'))  # Remove empty wallets dir
-            for entry in os.listdir(cache_path()):
-                if entry not in ['chainstate', 'blocks', 'indexes']:  # Only indexes, chainstate and blocks folders
-                    os.remove(cache_path(entry))
+            (cache_path / "wallets").rmdir()  # Do not cache empty wallets dir
+            shutil.rmtree(cache_path / "fees")  # Do not cache fees dat files
+            for entry in cache_path.iterdir():
+                if entry.name not in ["chainstate", "blocks", "indexes"]:  # Only keep indexes, chainstate and blocks folders
+                    entry.unlink()
 
         for i in range(self.num_nodes):
             self.log.debug("Copy cache directory {} to node {}".format(cache_node_dir, i))
@@ -1027,6 +1033,11 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         if platform.system() != "Linux":
             raise SkipTest("not on a Linux system")
 
+    def skip_if_no_lsof_on_nonlinux(self):
+        """Skip the running test if the lsof utility is not available on non-Linux platforms."""
+        if sys.platform != "linux" and shutil.which("lsof") is None:
+            raise SkipTest("lsof not available")
+
     def skip_if_platform_not_posix(self):
         """Skip the running test if we are not on a POSIX platform"""
         if os.name != 'posix':
@@ -1078,6 +1089,11 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         if not self.is_ipc_compiled():
             raise SkipTest("ipc has not been compiled.")
 
+    def skip_if_no_gui(self):
+        """Skip the running test if the GUI has not been compiled."""
+        if not self.is_gui_compiled():
+            raise SkipTest("GUI has not been compiled.")
+
     def skip_if_no_previous_releases(self):
         """Skip the running test if previous releases are not available."""
         if not self.has_previous_releases():
@@ -1114,51 +1130,55 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def is_bench_compiled(self):
         """Checks whether bench_bitcoin was compiled."""
-        return self.config["components"].getboolean("BUILD_BENCH")
+        return self.config.getboolean("components", "BUILD_BENCH")
 
     def is_cli_compiled(self):
         """Checks whether bitcoin-cli was compiled."""
-        return self.config["components"].getboolean("ENABLE_CLI")
+        return self.config.getboolean("components", "ENABLE_CLI")
 
     def is_external_signer_compiled(self):
         """Checks whether external signer support was compiled."""
-        return self.config["components"].getboolean("ENABLE_EXTERNAL_SIGNER")
+        return self.config.getboolean("components", "ENABLE_EXTERNAL_SIGNER")
 
     def is_wallet_compiled(self):
         """Checks whether the wallet module was compiled."""
-        return self.config["components"].getboolean("ENABLE_WALLET")
+        return self.config.getboolean("components", "ENABLE_WALLET")
 
     def is_wallet_tool_compiled(self):
         """Checks whether bitcoin-wallet was compiled."""
-        return self.config["components"].getboolean("ENABLE_WALLET_TOOL")
+        return self.config.getboolean("components", "ENABLE_WALLET_TOOL")
 
     def is_bitcoin_tx_compiled(self):
         """Checks whether bitcoin-tx was compiled."""
-        return self.config["components"].getboolean("BUILD_BITCOIN_TX")
+        return self.config.getboolean("components", "BUILD_BITCOIN_TX")
 
     def is_bitcoin_util_compiled(self):
         """Checks whether bitcoin-util was compiled."""
-        return self.config["components"].getboolean("ENABLE_BITCOIN_UTIL")
+        return self.config.getboolean("components", "ENABLE_BITCOIN_UTIL")
 
     def is_bitcoin_chainstate_compiled(self):
         """Checks whether bitcoin-chainstate was compiled."""
-        return self.config["components"].getboolean("ENABLE_BITCOIN_CHAINSTATE")
+        return self.config.getboolean("components", "ENABLE_BITCOIN_CHAINSTATE")
 
     def is_zmq_compiled(self):
         """Checks whether the zmq module was compiled."""
-        return self.config["components"].getboolean("ENABLE_ZMQ")
+        return self.config.getboolean("components", "ENABLE_ZMQ")
 
     def is_embedded_asmap_compiled(self):
         """Checks whether ASMap data was embedded during compilation."""
-        return self.config["components"].getboolean("ENABLE_EMBEDDED_ASMAP")
+        return self.config.getboolean("components", "ENABLE_EMBEDDED_ASMAP")
 
     def is_usdt_compiled(self):
         """Checks whether the USDT tracepoints were compiled."""
-        return self.config["components"].getboolean("ENABLE_USDT_TRACEPOINTS")
+        return self.config.getboolean("components", "ENABLE_USDT_TRACEPOINTS")
 
     def is_ipc_compiled(self):
         """Checks whether ipc was compiled."""
-        return self.config["components"].getboolean("ENABLE_IPC")
+        return self.config.getboolean("components", "ENABLE_IPC")
+
+    def is_gui_compiled(self):
+        """Checks whether the GUI was compiled."""
+        return self.config.getboolean("components", "BUILD_GUI")
 
     def has_blockfile(self, node, filenum: str):
         return (node.blocks_path/ f"blk{filenum}.dat").is_file()

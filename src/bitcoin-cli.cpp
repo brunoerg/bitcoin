@@ -142,11 +142,11 @@ static void SetupCliArgs(ArgsManager& argsman)
 {
     SetupHelpOptions(argsman);
 
-    const auto defaultBaseParams = CreateBaseChainParams(ChainType::MAIN);
-    const auto testnetBaseParams = CreateBaseChainParams(ChainType::TESTNET);
-    const auto testnet4BaseParams = CreateBaseChainParams(ChainType::TESTNET4);
-    const auto signetBaseParams = CreateBaseChainParams(ChainType::SIGNET);
-    const auto regtestBaseParams = CreateBaseChainParams(ChainType::REGTEST);
+    const auto defaultBaseParams = CreateBaseChainParams(argsman, ChainType::MAIN);
+    const auto testnetBaseParams = CreateBaseChainParams(argsman, ChainType::TESTNET);
+    const auto testnet4BaseParams = CreateBaseChainParams(argsman, ChainType::TESTNET4);
+    const auto signetBaseParams = CreateBaseChainParams(argsman, ChainType::SIGNET);
+    const auto regtestBaseParams = CreateBaseChainParams(argsman, ChainType::REGTEST);
 
     argsman.AddArg("-version", "Print version and exit", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-conf=<file>", strprintf("Specify configuration file. Relative paths will be prefixed by datadir location. (default: %s)", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -854,7 +854,7 @@ private:
         : m_socket(std::move(socket)), m_host(host), m_timeout(timeout) {}
     bool SendRequest(std::string_view request);
     HTTPResponse ReadResponse();
-    std::optional<std::string> Recv(std::chrono::time_point<std::chrono::steady_clock> deadline);
+    std::optional<std::string> Recv();
 };
 
 HTTPClient HTTPClient::Connect(const std::string& host, uint16_t port, std::chrono::seconds timeout)
@@ -906,13 +906,9 @@ HTTPResponse HTTPClient::Post(const std::string& endpoint,
 
 bool HTTPClient::SendRequest(std::string_view request)
 {
-    const auto deadline{std::chrono::steady_clock::now() + m_timeout};
-
     while (!request.empty()) {
         Sock::Event event{0};
-        auto time_left = std::chrono::duration_cast<std::chrono::milliseconds>(
-            deadline - std::chrono::steady_clock::now());
-        if (time_left.count() <= 0 || !m_socket->Wait(time_left, Sock::SendEvent, &event)) {
+        if (!m_socket->Wait(m_timeout, Sock::SendEvent, &event)) {
             return false;
         }
 
@@ -938,13 +934,12 @@ HTTPResponse HTTPClient::ReadResponse()
 {
     HTTPResponse response;
     std::string buffer;
-    const auto deadline{std::chrono::steady_clock::now() + m_timeout};
 
     // Read data until we have complete headers
     size_t headers_end = 0;
 
     while (headers_end == 0) {
-        if (auto result{Recv(deadline)}) {
+        if (auto result{Recv()}) {
             buffer.append(*result);
         } else {
             std::this_thread::yield();
@@ -987,7 +982,7 @@ HTTPResponse HTTPClient::ReadResponse()
     headers.Read(reader);
 
     // Determine body length
-    size_t content_length = 0;
+    std::optional<size_t> content_length;
     bool chunked = false;
 
     // RFC 9112 §6.3 says responses with both Transfer-Encoding and Content-Length
@@ -999,11 +994,10 @@ HTTPResponse HTTPClient::ReadResponse()
     } else {
         auto content_length_header = headers.FindFirst("content-length");
         if (content_length_header) {
-            auto maybe_len = ToIntegral<size_t>(*content_length_header);
-            if (!maybe_len) {
+            content_length = ToIntegral<size_t>(*content_length_header);
+            if (!content_length) {
                 throw HTTPError{"Invalid Content-Length"};
             }
-            content_length = *maybe_len;
         }
     }
 
@@ -1044,7 +1038,7 @@ HTTPResponse HTTPClient::ReadResponse()
                         size_t crlf_pos = buffer.find("\r\n");
                         if (crlf_pos == std::string::npos) {
                             // Need more data
-                            if (auto result{Recv(deadline)}) {
+                            if (auto result{Recv()}) {
                                 buffer.append(*result);
                             } else {
                                 std::this_thread::yield();
@@ -1076,7 +1070,7 @@ HTTPResponse HTTPClient::ReadResponse()
 
             // Need more data
             while (true) {
-                if (auto result{Recv(deadline)}) {
+                if (auto result{Recv()}) {
                     buffer.append(*result);
                     break;
                 } else {
@@ -1086,10 +1080,10 @@ HTTPResponse HTTPClient::ReadResponse()
         }
 
         response.body = std::move(body);
-    } else if (content_length > 0) {
+    } else if (content_length) {
         // Fixed content length
-        while (buffer.size() < content_length) {
-            if (auto result{Recv(deadline)}) {
+        while (buffer.size() < *content_length) {
+            if (auto result{Recv()}) {
                 buffer.append(*result);
             } else {
                 std::this_thread::yield();
@@ -1098,14 +1092,14 @@ HTTPResponse HTTPClient::ReadResponse()
 
         // Possibly shrink buffer in case we got a larger response than
         // originally specified.
-        buffer.resize(content_length);
+        buffer.resize(*content_length);
         response.body = std::move(buffer);
     } else {
         // No Content-Length and not chunked: read until the peer closes the
         // connection (RFC 9112 §6.3, HTTP/1.0 fallback).
         try {
             while (true) {
-                if (auto result{Recv(deadline)}) {
+                if (auto result{Recv()}) {
                     buffer.append(*result);
                 } else {
                     std::this_thread::yield();
@@ -1118,7 +1112,7 @@ HTTPResponse HTTPClient::ReadResponse()
     return response;
 }
 
-std::optional<std::string> HTTPClient::Recv(const std::chrono::time_point<std::chrono::steady_clock> deadline)
+std::optional<std::string> HTTPClient::Recv()
 {
     auto wait_for_readable{[this](std::chrono::milliseconds timeout) -> bool {
         Sock::Event event{0};
@@ -1128,9 +1122,7 @@ std::optional<std::string> HTTPClient::Recv(const std::chrono::time_point<std::c
         return (event & Sock::RecvEvent) != 0;
     }};
 
-    auto time_left = std::chrono::duration_cast<std::chrono::milliseconds>(
-        deadline - std::chrono::steady_clock::now());
-    if (time_left.count() <= 0 || !wait_for_readable(time_left)) {
+    if (!wait_for_readable(m_timeout)) {
         throw CConnectionFailed{"timeout"};
     }
 
@@ -1236,10 +1228,12 @@ static UniValue CallRPC(BaseRequestHandler* rh, const std::string& strMethod, co
 
     if (response.status == HTTP_UNAUTHORIZED) {
         std::string error{"Authorization failed: "};
+        bool read_err = false;
         if (auth_cookie_result.has_value()) {
             switch (*auth_cookie_result) {
             case AuthCookieResult::Error:
                 error += "Failed to read cookie file and no rpcpassword was specified.";
+                read_err = true;
                 break;
             case AuthCookieResult::Disabled:
                 error += "Cookie file was disabled via -norpccookiefile and no rpcpassword was specified.";
@@ -1252,6 +1246,9 @@ static UniValue CallRPC(BaseRequestHandler* rh, const std::string& strMethod, co
             error += "Incorrect rpcuser or rpcpassword were specified.";
         }
         error += strprintf(" Configuration file: (%s)", fs::PathToString(gArgs.GetConfigFilePath()));
+        if (gArgs.GetChainType() == ChainType::SIGNET && read_err) {
+            error += "\nIs your -signetchallenge correct for custom signets?";
+        }
         throw std::runtime_error(error);
     } else if (response.status == HTTP_SERVICE_UNAVAILABLE) {
         throw std::runtime_error(strprintf("Server response: %s", response.body));

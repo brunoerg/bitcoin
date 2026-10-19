@@ -121,11 +121,6 @@ BOOST_FIXTURE_TEST_CASE(rbf_helper_functions, TestChain100Setup)
     BOOST_CHECK_EQUAL(entry8_high->GetFee(), high_fee);
 
     CTxMemPool::setEntries set_12_normal{entry1_normal, entry2_normal};
-    CTxMemPool::setEntries set_34_cpfp{entry3_low, entry4_high};
-    CTxMemPool::setEntries set_56_low{entry5_low, entry6_low_prioritised};
-    CTxMemPool::setEntries set_78_high{entry7_high, entry8_high};
-    CTxMemPool::setEntries all_entries{entry1_normal, entry2_normal, entry3_low, entry4_high,
-                                       entry5_low, entry6_low_prioritised, entry7_high, entry8_high};
     CTxMemPool::setEntries empty_set;
 
     const auto unused_txid = Txid::FromUint256(GetRandHash());
@@ -221,7 +216,7 @@ BOOST_FIXTURE_TEST_CASE(rbf_conflicts_calculator, TestChain100Setup)
     dummy.clear();
 
     // If we mine the parent_tx's, then the clusters split (102 clusters).
-    pool.removeForBlock({parent_tx_1, parent_tx_2}, /*nBlockHeight=*/ 1);
+    pool.removeForBlock({parent_tx_1, parent_tx_2});
 
     // Add some descendants now to each of the direct children (we can do this now that the clusters have split).
     for (const auto& child : direct_children) {
@@ -274,66 +269,70 @@ BOOST_FIXTURE_TEST_CASE(improves_feerate, TestChain100Setup)
     // Now test ImprovesFeerateDiagram with various levels of "package rbf" feerates
 
     // It doesn't improve itself
-    auto changeset = pool.GetChangeSet();
-    changeset->StageRemoval(entry1);
-    changeset->StageRemoval(entry2);
-    changeset->StageAddition(tx1_conflict, tx1_fee, 0, 1, 0, false, 4, LockPoints());
-    changeset->StageAddition(tx3, tx2_fee, 0, 1, 0, false, 4, LockPoints());
-    const auto res1 = ImprovesFeerateDiagram(*changeset);
-    BOOST_CHECK(res1.has_value());
-    BOOST_CHECK(res1.value().first == DiagramCheckError::FAILURE);
-    BOOST_CHECK(res1.value().second == "insufficient feerate: does not improve feerate diagram");
+    {
+        auto changeset{pool.GetChangeSet()};
+        changeset->StageRemoval(entry1);
+        changeset->StageRemoval(entry2);
+        changeset->StageAddition(tx1_conflict, tx1_fee, 0, 1, 0, false, 4, LockPoints());
+        changeset->StageAddition(tx3, tx2_fee, 0, 1, 0, false, 4, LockPoints());
+        const auto res1 = ImprovesFeerateDiagram(*changeset);
+        BOOST_CHECK(res1.has_value());
+        BOOST_CHECK(res1.value().first == DiagramCheckError::FAILURE);
+        BOOST_CHECK(res1.value().second == "insufficient feerate: does not improve feerate diagram");
+    }
 
     // With one more satoshi it does
-    changeset.reset();
-    changeset = pool.GetChangeSet();
-    changeset->StageRemoval(entry1);
-    changeset->StageRemoval(entry2);
-    changeset->StageAddition(tx1_conflict, tx1_fee+1, 0, 1, 0, false, 4, LockPoints());
-    changeset->StageAddition(tx3, tx2_fee, 0, 1, 0, false, 4, LockPoints());
-    BOOST_CHECK(ImprovesFeerateDiagram(*changeset) == std::nullopt);
+    {
+        auto changeset{pool.GetChangeSet()};
+        changeset->StageRemoval(entry1);
+        changeset->StageRemoval(entry2);
+        changeset->StageAddition(tx1_conflict, tx1_fee + 1, 0, 1, 0, false, 4, LockPoints());
+        changeset->StageAddition(tx3, tx2_fee, 0, 1, 0, false, 4, LockPoints());
+        BOOST_CHECK(ImprovesFeerateDiagram(*changeset) == std::nullopt);
+    }
 
-    changeset.reset();
     // With prioritisation of in-mempool conflicts, it affects the results of the comparison using the same args as just above
     pool.PrioritiseTransaction(entry1->GetSharedTx()->GetHash(), /*nFeeDelta=*/1);
-    changeset = pool.GetChangeSet();
-    changeset->StageRemoval(entry1);
-    changeset->StageRemoval(entry2);
-    changeset->StageAddition(tx1_conflict, tx1_fee+1, 0, 1, 0, false, 4, LockPoints());
-    changeset->StageAddition(tx3, tx2_fee, 0, 1, 0, false, 4, LockPoints());
-    const auto res2 = ImprovesFeerateDiagram(*changeset);
-    BOOST_CHECK(res2.has_value());
-    BOOST_CHECK(res2.value().first == DiagramCheckError::FAILURE);
-    BOOST_CHECK(res2.value().second == "insufficient feerate: does not improve feerate diagram");
-    changeset.reset();
-
+    {
+        auto changeset{pool.GetChangeSet()};
+        changeset->StageRemoval(entry1);
+        changeset->StageRemoval(entry2);
+        changeset->StageAddition(tx1_conflict, tx1_fee + 1, 0, 1, 0, false, 4, LockPoints());
+        changeset->StageAddition(tx3, tx2_fee, 0, 1, 0, false, 4, LockPoints());
+        const auto res2 = ImprovesFeerateDiagram(*changeset);
+        BOOST_CHECK(res2.has_value());
+        BOOST_CHECK(res2.value().first == DiagramCheckError::FAILURE);
+        BOOST_CHECK(res2.value().second == "insufficient feerate: does not improve feerate diagram");
+    }
     pool.PrioritiseTransaction(entry1->GetSharedTx()->GetHash(), /*nFeeDelta=*/-1);
 
     // With fewer vbytes it does
     CMutableTransaction tx4{entry3.GetTx()};
     tx4.vin[0].scriptWitness = CScriptWitness(); // Clear out the witness, to reduce size
     auto entry4 = entry.FromTx(MakeTransactionRef(tx4));
-    changeset = pool.GetChangeSet();
-    changeset->StageRemoval(entry1);
-    changeset->StageRemoval(entry2);
-    changeset->StageAddition(tx1_conflict, tx1_fee, 0, 1, 0, false, 4, LockPoints());
-    changeset->StageAddition(entry4.GetSharedTx(), tx2_fee, 0, 1, 0, false, 4, LockPoints());
-    BOOST_CHECK(ImprovesFeerateDiagram(*changeset) == std::nullopt);
-    changeset.reset();
+    {
+        auto changeset{pool.GetChangeSet()};
+        changeset->StageRemoval(entry1);
+        changeset->StageRemoval(entry2);
+        changeset->StageAddition(tx1_conflict, tx1_fee, 0, 1, 0, false, 4, LockPoints());
+        changeset->StageAddition(entry4.GetSharedTx(), tx2_fee, 0, 1, 0, false, 4, LockPoints());
+        BOOST_CHECK(ImprovesFeerateDiagram(*changeset) == std::nullopt);
+    }
 
     // Adding a grandchild makes the cluster size 3, which is also calculable
-    const auto tx5 = make_tx(/*inputs=*/ {tx2}, /*output_values=*/ {995 * CENT});
+    const auto tx5 = make_tx(/*inputs=*/{tx2}, /*output_values=*/{995 * CENT});
     TryAddToMempool(pool, entry.Fee(normal_fee).FromTx(tx5));
     const auto entry5 = pool.GetIter(tx5->GetHash()).value();
-
-    changeset = pool.GetChangeSet();
-    changeset->StageRemoval(entry1);
-    changeset->StageRemoval(entry2);
-    changeset->StageRemoval(entry5);
-    changeset->StageAddition(tx1_conflict, tx1_fee, 0, 1, 0, false, 4, LockPoints());
-    changeset->StageAddition(entry4.GetSharedTx(), tx2_fee + entry5->GetModifiedFee() + 1, 0, 1, 0, false, 4, LockPoints());
-    const auto res3 = ImprovesFeerateDiagram(*changeset);
-    BOOST_CHECK(res3 == std::nullopt);
+    {
+        auto changeset{pool.GetChangeSet()};
+        changeset->StageRemoval(entry1);
+        changeset->StageRemoval(entry2);
+        changeset->StageRemoval(entry5);
+        changeset->StageAddition(tx1_conflict, tx1_fee, 0, 1, 0, false, 4, LockPoints());
+        changeset->StageAddition(entry4.GetSharedTx(), tx2_fee + entry5->GetModifiedFee() + 1, 0, 1, 0, false, 4, LockPoints());
+        const auto res3 = ImprovesFeerateDiagram(*changeset);
+        BOOST_CHECK(res3 == std::nullopt);
+    }
 }
 
 BOOST_FIXTURE_TEST_CASE(calc_feerate_diagram_rbf, TestChain100Setup)

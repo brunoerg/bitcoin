@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <variant>
 
 const SigningProvider& DUMMY_SIGNING_PROVIDER = SigningProvider();
 
@@ -230,7 +231,7 @@ bool FillableSigningProvider::GetKey(const CKeyID &address, CKey &keyOut) const
 bool FillableSigningProvider::AddCScript(const CScript& redeemScript)
 {
     if (redeemScript.size() > MAX_SCRIPT_ELEMENT_SIZE) {
-        LogError("FillableSigningProvider::AddCScript(): redeemScripts > %i bytes are invalid\n", MAX_SCRIPT_ELEMENT_SIZE);
+        LogInfo("FillableSigningProvider::AddCScript(): redeemScripts > %i bytes are invalid", MAX_SCRIPT_ELEMENT_SIZE); // TODO: remove, callers should take care of checking input / reporting errors
         return false;
     }
 

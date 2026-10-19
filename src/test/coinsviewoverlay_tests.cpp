@@ -10,7 +10,6 @@
 #include <txdb.h>
 #include <uint256.h>
 #include <util/byte_units.h>
-#include <util/hasher.h>
 #include <util/threadpool.h>
 
 #include <boost/test/unit_test.hpp>
@@ -24,9 +23,9 @@
 
 namespace {
 
-std::shared_ptr<ThreadPool> MakeStartedThreadPool()
+util::NotNullSharedPtr<ThreadPool> MakeStartedThreadPool()
 {
-    auto pool{std::make_shared<ThreadPool>("fetch_test")};
+    util::NotNull pool{std::make_shared<ThreadPool>("fetch_test")};
     pool->Start(DEFAULT_PREVOUTFETCH_THREADS);
     return pool;
 }
@@ -57,14 +56,14 @@ void PopulateView(const CBlock& block, CCoinsView& view, bool spent = false)
     CCoinsViewCache cache{&view};
     cache.SetBestBlock(uint256::ONE);
 
-    std::unordered_set<Txid, SaltedTxidHasher> txids{};
+    std::unordered_set<Txid, SaltedCoinsCacheHasher> txids{};
     txids.reserve(block.vtx.size() - 1);
     for (const auto& tx : block.vtx | std::views::drop(1)) {
         for (const auto& in : tx->vin) {
             if (txids.contains(in.prevout.hash)) continue;
             Coin coin{};
             if (!spent) coin.out.nValue = 1;
-            cache.EmplaceCoinInternalDANGER(COutPoint{in.prevout}, std::move(coin));
+            cache.EmplaceCoinInternalDANGER(in.prevout, std::move(coin));
         }
         txids.emplace(tx->GetHash());
     }
@@ -75,7 +74,7 @@ void PopulateView(const CBlock& block, CCoinsView& view, bool spent = false)
 void CheckCache(const CBlock& block, const CCoinsViewCache& cache)
 {
     uint32_t counter{0};
-    std::unordered_set<Txid, SaltedTxidHasher> txids{};
+    std::unordered_set<Txid, SaltedCoinsCacheHasher> txids{};
     txids.reserve(block.vtx.size() - 1);
 
     for (const auto& tx : block.vtx) {
@@ -203,6 +202,8 @@ BOOST_AUTO_TEST_CASE(access_non_input_coins)
     main_cache.EmplaceCoinInternalDANGER(COutPoint{outpoint}, std::move(coin));
 
     CoinsViewOverlay view{&main_cache, MakeStartedThreadPool()};
+    // The block has no non-coinbase transactions, so this fetches nothing and only creates the
+    // reset guard. All lookups below use the fallback path.
     const auto reset_guard{view.StartFetching(block)};
 
     // Non-input fallback hit.
@@ -225,7 +226,7 @@ BOOST_AUTO_TEST_CASE(fetch_out_of_order_input_uses_normal_lookup)
     PopulateView(block, main_cache);
 
     std::vector<COutPoint> fetched_inputs;
-    std::unordered_set<Txid, SaltedTxidHasher> txids;
+    std::unordered_set<Txid, SaltedCoinsCacheHasher> txids;
     txids.reserve(block.vtx.size() - 1);
     for (const auto& tx : block.vtx | std::views::drop(1)) {
         for (const auto& input : tx->vin) {
@@ -282,7 +283,7 @@ BOOST_AUTO_TEST_CASE(fetch_unstarted_thread_pool)
     CCoinsViewDB db{{.path = "", .cache_bytes = 1_MiB, .memory_only = true}, {}};
     CCoinsViewCache main_cache{&db};
     PopulateView(block, main_cache);
-    auto thread_pool{std::make_shared<ThreadPool>("fetch_none")};
+    util::NotNull thread_pool{std::make_shared<ThreadPool>("fetch_none")};
     CoinsViewOverlay view{&main_cache, thread_pool};
     const auto reset_guard{view.StartFetching(block)};
     CheckCache(block, view);
@@ -296,7 +297,7 @@ BOOST_AUTO_TEST_CASE(fetch_interrupted_thread_pool_uses_normal_lookup)
     CCoinsViewCache main_cache{&db};
     PopulateView(block, main_cache);
 
-    auto thread_pool{std::make_shared<ThreadPool>("fetch_intr")};
+    util::NotNull thread_pool{std::make_shared<ThreadPool>("fetch_intr")};
     thread_pool->Start(DEFAULT_PREVOUTFETCH_THREADS);
     thread_pool->Interrupt();
     CoinsViewOverlay view{&main_cache, thread_pool};
